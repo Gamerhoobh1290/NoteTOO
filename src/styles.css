@@ -1487,6 +1487,165 @@ textarea:focus {
 .notes-editor.split .notes-preview {
   border-left: 1px solid var(--border);
 }
+
+/* ---------- notes with tables: text blocks and table blocks stacked ---------- */
+.note-blocks {
+  overflow: auto;
+  min-height: 0;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 24px;
+}
+.notes-editor .note-blocks textarea {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 6px 24px;
+}
+.note-text:first-child textarea {
+  padding-top: 20px;
+}
+.note-text.last {
+  flex: 1;
+}
+.note-text.last textarea {
+  min-height: 120px;
+}
+.note-gap {
+  margin: 4px 24px;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+}
+.note-gap:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.note-table {
+  margin: 6px 24px;
+}
+.note-table-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-bottom: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.note-table:hover .note-table-tools,
+.note-table:focus-within .note-table-tools {
+  opacity: 1;
+}
+.note-table-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--border);
+}
+.icon-btn.danger-hover:hover {
+  color: var(--danger);
+  background: var(--danger-weak);
+}
+.note-table-scroll {
+  overflow-x: auto;
+}
+.note-table table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+.note-table table.sized {
+  width: auto;
+}
+.note-table th,
+.note-table td {
+  border: 1px solid var(--border-strong);
+  padding: 0;
+  position: relative;
+  background: var(--surface);
+}
+.note-table th {
+  background: var(--surface-2);
+}
+.note-table input {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 6px 9px;
+  font: 14px/1.4 var(--font);
+  min-width: 0;
+}
+.note-table th input {
+  font-weight: 600;
+}
+.note-table input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--accent-weak);
+}
+.col-resize {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
+  touch-action: none;
+}
+.note-table th:last-child .col-resize {
+  right: 0;
+}
+.col-resize:hover,
+.col-resize:focus-visible {
+  background: var(--accent);
+  outline: none;
+  opacity: 0.6;
+}
+.table-picker-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.table-picker {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 10px;
+}
+.table-picker-grid {
+  display: grid;
+  gap: 3px;
+}
+.table-picker-cell {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface);
+}
+.table-picker-cell.on {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+}
+.table-picker-label {
+  margin: 8px 0 0;
+  font-size: 13px;
+  white-space: nowrap;
+}
 .seg {
   display: inline-flex;
   border: 1px solid var(--border);
