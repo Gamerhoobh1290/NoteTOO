@@ -1,0 +1,34 @@
+{
+  "appId": "com.notetoo.updater",
+  "productName": "NoteTOO Updater",
+  "copyright": "NoteTOO",
+  "extraMetadata": {
+    "name": "notetoo-updater",
+    "productName": "NoteTOO Updater",
+    "version": "1.0.0",
+    "description": "Updates the installed NoteTOO.",
+    "main": "out/updater/main.mjs"
+  },
+  "directories": {
+    "output": "release/updater",
+    "buildResources": "build"
+  },
+  "files": ["dist-updater/**/*", "out/updater/**/*", "package.json"],
+  "asar": true,
+  "win": {
+    "target": [{ "target": "nsis", "arch": ["x64"] }],
+    "icon": "build/icon.ico",
+    "executableName": "NoteTOO Updater"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "NoteTOO Updater",
+    "installerIcon": "build/icon.ico",
+    "uninstallerIcon": "build/icon.ico",
+    "artifactName": "NoteTOO-Updater-Setup-${version}.${ext}"
+  }
+}

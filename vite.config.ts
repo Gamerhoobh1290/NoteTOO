@@ -89,5 +89,5 @@ function pdfjsAssets(): Plugin {
 export default defineConfig({
   base: './',
   plugins: [react(), sampleFolder(), pdfjsAssets()],
-  test: { environment: 'node', include: ['src/**/*.test.ts', 'electron/**/*.test.ts'] },
+  test: { environment: 'node', include: ['src/**/*.test.ts', 'electron/**/*.test.ts', 'updater/**/*.test.ts'] },
 });

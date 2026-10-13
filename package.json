@@ -13,7 +13,13 @@
     "desktop:compile": "tsc -p electron",
     "desktop:dev": "npm run desktop:compile && node scripts/desktop-dev.mjs",
     "desktop": "npm run build && npm run desktop:compile && electron .",
-    "dist:win": "npm run build && npm run desktop:compile && electron-builder --win --x64"
+    "dist:win": "npm run build && npm run desktop:compile && electron-builder --win --x64",
+    "updater:compile": "tsc -p updater",
+    "updater:build": "vite build --config updater/vite.config.ts && npm run updater:compile",
+    "updater:dev": "npm run updater:compile && node scripts/updater-dev.mjs",
+    "dist:updater": "npm run updater:build && electron-builder --config updater/electron-builder.json --win --x64",
+    "release:sign": "node scripts/release/sign.mjs",
+    "release:publish": "node scripts/release/publish.mjs"
   },
   "devDependencies": {
     "@fontsource-variable/geist": "^5.3.0",
