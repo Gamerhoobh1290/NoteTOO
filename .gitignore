@@ -2,5 +2,5 @@ node_modules
 dist
 sample-school
 out
-release
+/release
 dist-updater
