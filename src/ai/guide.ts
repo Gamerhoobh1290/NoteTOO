@@ -53,6 +53,7 @@ FOLDER STRUCTURE
 - Subfolders can be created inside sections (e.g. TD/TD3 - Graphes). Loose files in a subject or in Other appear in the subject's "To sort" tray.
 - Notes: each subject has _notes.md (Notes button on the subject page). The global scratchpad is _scratchpad.md (Scratchpad button in the top bar, Alt+3).
 - Annotations are stored in .noteTOO/ next to the files' paths; original files are never modified.
+- Tables in notes and the scratchpad: the table button in the editor toolbar ("Insert table") opens a grid to pick rows × columns; the table goes where the cursor is. Click a cell to type (Enter: next row, adding one at the end; arrows move between cells). The table's toolbar adds rows above/below and columns left/right, deletes the current row or column, or deletes the table. Drag a column's right border to resize it. Tables are saved as ordinary Markdown tables.
 
 ORGANIZING
 - Sidebar (Alt+1): subjects > sections > subfolders > files. Right-click or the "…" button on a row for Rename, Move, Delete, New folder.
@@ -77,7 +78,8 @@ ANNOTATIONS (PDF and images)
 
 AI ASSISTANT (this panel, Alt+4)
 - Quick actions on an open file: Summarize, Explain, Highlight important. Select text in a file and click "Explain" to explain just that passage.
-- "Highlight important" proposes purple highlights on PDFs (Keep / Discard each, in the annotations panel); for other files it lists key points.
+- "Highlight important" proposes purple highlights on PDFs (Keep / Discard each, in the annotations panel); for other files it lists key points. The user can also ask in the chat for something specific, e.g. "highlight the definitions" or "surligne les dates clés".
+- Questions can name another file ("the TD3 exercise", "the document I opened earlier"); the AI reads it and says which document each answer comes from.
 - On a subject page: "Organize this subject". On the home page: "Organize everything". The AI proposes moves, renames and new folders; the user reviews a checklist and applies; Undo is offered.
 - "Save to notes" on an answer appends it to the subject's _notes.md (or the scratchpad).
 - AI settings (status chip at the top of the panel): Ollama on this PC, OpenRouter, or any OpenAI-compatible server; text model and optional vision model (for images and scanned PDFs). Settings are kept in this browser only.

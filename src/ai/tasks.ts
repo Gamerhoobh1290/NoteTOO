@@ -433,6 +433,8 @@ const INTENT_GUIDE: Partial<Record<Intent, string>> = {
 export interface AnswerInput {
   history: ChatMessage[];
   where: string;
+  /** path of the file open on screen, if any */
+  openPath?: string;
   intent: Intent;
   docs: DocInfo[];
   /** files the question named that could not be read */
@@ -470,11 +472,13 @@ export async function answer(ctx: TaskCtx, a: AnswerInput): Promise<string> {
   const build = (extra?: { query: string }) => {
     let partial = false;
     const blocks = a.docs.map((d) => {
-      if (d.doc.kind === 'image') return `<document name="${d.name}">\n(${ctx.s.visionModel ? 'attached as an image' : 'an image; no vision model is set up, so it cannot be read'})\n</document>`;
-      if (d.doc.kind === 'none') return `<document name="${d.name}">\n(cannot be read: ${d.doc.reason})\n</document>`;
+      const open = a.openPath ? ` open="${d.path === a.openPath ? 'on screen now' : 'not the file on screen'}"` : '';
+      const id = `name="${d.name}" path="${d.path}"${open}`;
+      if (d.doc.kind === 'image') return `<document ${id}>\n(${ctx.s.visionModel ? 'attached as an image' : 'an image; no vision model is set up, so it cannot be read'})\n</document>`;
+      if (d.doc.kind === 'none') return `<document ${id}>\n(cannot be read: ${d.doc.reason})\n</document>`;
       const c = contextFor(d, extra ? `${extra.query} ${question}` : question, previous, extra ? Math.floor(per * 1.3) : per);
       partial ||= c.partial;
-      return `<document name="${d.name}"${d.model ? ` kind="${d.profile?.type || TYPE_NAMES[d.model.type]}"` : ''}${d.doc.kind === 'text' && d.doc.paged ? ` pages="${d.doc.pages.length}"` : ''}>\n${c.text}\n</document>`;
+      return `<document ${id}${d.model ? ` kind="${d.profile?.type || TYPE_NAMES[d.model.type]}"` : ''}${d.doc.kind === 'text' && d.doc.paged ? ` pages="${d.doc.pages.length}"` : ''}>\n${c.text}\n</document>`;
     });
     return { text: blocks.join('\n\n'), partial };
   };
@@ -492,6 +496,7 @@ export async function answer(ctx: TaskCtx, a: AnswerInput): Promise<string> {
     `${Object.entries(SHOW_TARGETS).map(([id, t]) => `${id} (${t.label})`).join(', ')}.\n<guide>\n${HELP_TEXT}\n</guide>`;
   const situation =
     `\n\nThe user is ${a.where}.` +
+    (a.docs.length ? ' The documents below are the ones the question refers to (NoteTOO picked them from what the user said); answer from them.' : '') +
     (a.recent.length ? ` Other files they opened recently: ${a.recent.map((r) => `"${r}"`).join(', ')}.` : '') +
     (a.unreadable.length ? ` These files could not be read, so say you have not seen them: ${a.unreadable.map((r) => `"${r}"`).join(', ')}.` : '') +
     (INTENT_GUIDE[a.intent] ? `\nFor this request: ${INTENT_GUIDE[a.intent]}` : '');

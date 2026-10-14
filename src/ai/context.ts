@@ -43,10 +43,13 @@ const EARLIER_DOC =
   /\b(document|fichier|file|pdf|cours|chapitre|lecture)\b.{0,40}\b(precedent|d avant|tout a l heure|earlier|previous(ly)?|before|avant|ouvert)\b|\b(previous|precedent|other|autre|last|dernier) (document|fichier|file|pdf|cours)\b/;
 const FOLLOW_UP = /^(et|and|also|aussi|puis|ensuite|then|what about|et pour|et si|and the|ok|d accord)\b/;
 
-/** Words of a file's name (weight 1) and of its folder (weight 0.5). */
+/** Words of a file's name (weight 1), of its folder (0.5) and of the folders above, such as the
+ *  subject (0.25: enough to tell two "TD3/ex2.pdf" apart, never enough to pick a file alone). */
 function nameWords(path: string): Map<string, number> {
   const w = new Map<string, number>();
-  for (const t of tokens(parentPath(path).split('/').pop() ?? '')) w.set(t, 0.5);
+  const folders = parentPath(path).split('/');
+  for (const f of folders.slice(0, -1)) for (const t of tokens(f)) w.set(t, 0.25);
+  for (const t of tokens(folders[folders.length - 1] ?? '')) w.set(t, 0.5);
   for (const t of tokens(baseName(path).replace(/\.[^.]+$/, ''))) w.set(t, 1);
   return w;
 }

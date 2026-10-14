@@ -54,6 +54,14 @@ describe('resolveDocs', () => {
     expect(r.ambiguous?.sort()).toEqual(['Maths/TD/TD3 - Graphes/ex2.pdf', 'Physique/TD/TD3/ex2.pdf']);
   });
 
+  it('settles it when the subject is named too', () => {
+    expect(resolveDocs('Celui de Physique : que demande ex2 du TD3 ?', base).paths).toEqual(['Physique/TD/TD3/ex2.pdf']);
+  });
+
+  it('never picks a file from its subject name alone', () => {
+    expect(resolveDocs('Explique la partie Physique', base).paths).toEqual([base.current]);
+  });
+
   it('understands "the document I opened earlier"', () => {
     const r = resolveDocs("Et dans le document que j'ai ouvert tout à l'heure ?", { ...base, recent: [base.current, 'History/Lectures/The Cold War - Lecture 4.pdf'] });
     expect(r.paths).toEqual(['History/Lectures/The Cold War - Lecture 4.pdf']);

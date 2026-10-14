@@ -342,7 +342,8 @@ function useAiState() {
       }
 
       const index = (await a.ensureIndex().catch(() => [])).filter((e) => e.kind === 'file').map((e) => e.path);
-      const resolved = resolveDocs(question, { current, recent: recent.current, index, lastDocs: lastDocs.current });
+      // "How do I…" questions about the app are answered from the guide, not from the open file.
+      const resolved = intent === 'app' ? { paths: [] } : resolveDocs(question, { current, recent: recent.current, index, lastDocs: lastDocs.current });
       if (resolved.ambiguous) {
         setMessages((ms) => [
           ...ms,
@@ -387,6 +388,7 @@ function useAiState() {
           const text = await tasks.answer(ctx, {
             history,
             where,
+            openPath: current,
             intent,
             docs,
             unreadable,
