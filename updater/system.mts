@@ -27,7 +27,7 @@ const UNINSTALL_KEYS = [
 export async function findInstall(): Promise<Install | null> {
   const out = await powershell(
     `Get-ItemProperty ${UNINSTALL_KEYS.map((k) => `'${k}'`).join(',')} -ErrorAction SilentlyContinue | ` +
-      `Where-Object { $_.DisplayName -like 'NoteTOO *' } | Select-Object DisplayName,DisplayVersion,InstallLocation | ConvertTo-Json -Compress`,
+      `Where-Object { $_.DisplayName -like 'NoteTOO *' } | Select-Object DisplayName,DisplayVersion,InstallLocation,UninstallString | ConvertTo-Json -Compress`,
   );
   return pickInstall(out ? JSON.parse(out) : null, existsSync);
 }

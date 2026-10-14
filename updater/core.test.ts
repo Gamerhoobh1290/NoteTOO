@@ -82,6 +82,16 @@ describe('pickInstall', () => {
   it('ignores an entry whose program is gone', () => {
     expect(core.pickInstall([{ DisplayName: 'NoteTOO 1.0.0', DisplayVersion: '1.0.0', InstallLocation: 'C:\\gone' }], () => false)).toBeNull();
   });
+  it('finds the folder from the uninstaller when InstallLocation is missing (per-user NSIS)', () => {
+    const entry = {
+      DisplayName: 'NoteTOO 1.0.0',
+      DisplayVersion: '1.0.0',
+      InstallLocation: '',
+      UninstallString: '"C:\\Users\\A\\AppData\\Local\\Programs\\NoteTOO\\Uninstall NoteTOO.exe" /currentuser',
+    };
+    const dir = 'C:\\Users\\A\\AppData\\Local\\Programs\\NoteTOO';
+    expect(core.pickInstall(entry, () => true)).toEqual({ version: '1.0.0', dir, exe: path.join(dir, 'NoteTOO.exe') });
+  });
   it('accepts a single object (PowerShell returns one entry unwrapped)', () => {
     expect(core.pickInstall({ DisplayName: 'NoteTOO 1.2.3', DisplayVersion: '1.2.3', InstallLocation: 'D:\\n' }, () => true)?.version).toBe('1.2.3');
   });

@@ -89,11 +89,15 @@ export function pickInstall(entries: unknown, exists: (file: string) => boolean)
   const list = Array.isArray(entries) ? entries : entries ? [entries] : [];
   for (const e of list) {
     if (!e || typeof e !== 'object') continue;
-    const { DisplayName, DisplayVersion, InstallLocation } = e as Record<string, unknown>;
+    const { DisplayName, DisplayVersion, InstallLocation, UninstallString } = e as Record<string, unknown>;
     if (typeof DisplayName !== 'string' || !/^NoteTOO \d/.test(DisplayName)) continue;
-    if (typeof DisplayVersion !== 'string' || !VERSION.test(DisplayVersion) || typeof InstallLocation !== 'string' || !InstallLocation) continue;
-    const exe = path.join(InstallLocation, 'NoteTOO.exe');
-    if (exists(exe)) return { version: DisplayVersion, dir: InstallLocation, exe };
+    if (typeof DisplayVersion !== 'string' || !VERSION.test(DisplayVersion)) continue;
+    // Per-user NSIS installs leave InstallLocation empty; the uninstaller sits in the program folder.
+    const uninstaller = typeof UninstallString === 'string' ? /^\s*"([^"]+)"|^\s*(\S+)/.exec(UninstallString) : null;
+    const dir = typeof InstallLocation === 'string' && InstallLocation ? InstallLocation : uninstaller ? path.win32.dirname(uninstaller[1] ?? uninstaller[2]) : '';
+    if (!dir) continue;
+    const exe = path.join(dir, 'NoteTOO.exe');
+    if (exists(exe)) return { version: DisplayVersion, dir, exe };
   }
   return null;
 }

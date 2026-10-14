@@ -89,5 +89,7 @@ function pdfjsAssets(): Plugin {
 export default defineConfig({
   base: './',
   plugins: [react(), sampleFolder(), pdfjsAssets()],
+  // Build outputs: watching them locks their folders on Windows, so `npm run dist:*` fails while the dev server runs.
+  server: { watch: { ignored: ['**/release/**', '**/dist-updater/**', '**/out/**'] } },
   test: { environment: 'node', include: ['src/**/*.test.ts', 'electron/**/*.test.ts', 'updater/**/*.test.ts'] },
 });
