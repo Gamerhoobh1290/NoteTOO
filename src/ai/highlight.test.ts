@@ -73,6 +73,13 @@ describe('selectHighlights', () => {
     expect(r.rejected[0].reason).toBe('too long');
   });
 
+  it('keeps a long one-sentence definition even though it is the whole paragraph', () => {
+    const sentence = 'Definition: the Cold War was a period of geopolitical rivalry between the United States and the Soviet Union, and their allies, that never escalated into direct large-scale fighting between the two superpowers.';
+    const mm = buildModel('l.pdf', doc([page(1, [sentence])]));
+    const r = selectHighlights([cand(mm.blocks[0].id, sentence)], mm, { ...opts, layout: undefined });
+    expect(r.kept).toHaveLength(1);
+  });
+
   it('drops duplicates, keeping the more important one', () => {
     const b = id('synthèse de matière');
     const r = selectHighlights(
@@ -102,6 +109,31 @@ describe('selectHighlights', () => {
     );
     expect(r.kept.map((k) => k.importance)).toEqual([5, 4]);
     expect(r.rejected[0].reason).toBe('over budget');
+  });
+});
+
+describe('coverage', () => {
+  const md: AiDoc & { kind: 'text' } = {
+    kind: 'text',
+    paged: false,
+    truncated: false,
+    format: 'markdown',
+    pages: ['# Phase claire\n\nLa photolyse de l’eau libère le dioxygène.\n\nLes thylakoïdes produisent ATP et NADPH.\n\n# Cycle de Calvin\n\nLa RuBisCO fixe le CO2 dans le stroma.\n\n# À retenir\n\nLe dioxygène vient de la photolyse de l’eau, pas du CO2.'],
+  };
+  const mm = buildModel('notes.md', md);
+  const bid = (needle: string) => mm.blocks.find((b) => b.text.includes(needle))!.id;
+  it('gives each main section its best point before a second one anywhere, and skips recaps', () => {
+    const r = selectHighlights(
+      [
+        cand(bid('photolyse de l’eau libère'), 'La photolyse de l’eau libère le dioxygène', { importance: 5 }),
+        cand(bid('thylakoïdes produisent'), 'Les thylakoïdes produisent ATP et NADPH', { importance: 5 }),
+        cand(bid('RuBisCO'), 'La RuBisCO fixe le CO2 dans le stroma', { importance: 4 }),
+        cand(bid('pas du CO2'), 'Le dioxygène vient de la photolyse de l’eau, pas du CO2', { importance: 5, category: 'conclusion' }),
+      ],
+      mm,
+      { budget: 2, minImportance: 3, allowExamples: false, existing: [] },
+    );
+    expect(r.kept.map((k) => k.text)).toEqual(['La photolyse de l’eau libère le dioxygène', 'La RuBisCO fixe le CO2 dans le stroma']);
   });
 });
 

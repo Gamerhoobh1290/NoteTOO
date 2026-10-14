@@ -311,6 +311,8 @@ export interface HighlightResult {
   kept: (Accepted & { rect?: Rect })[];
   proposed: number;
   rejected: Partial<Record<RejectReason, number>>;
+  /** what was left out and why (for checking the quality bar) */
+  leftOut: { quote: string; reason: RejectReason }[];
 }
 
 /** Text the user already highlighted on a PDF (spans whose center lies in one of their highlights). */
@@ -410,7 +412,12 @@ export async function findHighlights(ctx: TaskCtx, info: DocInfo, o: { focus: st
   const rejected: HighlightResult['rejected'] = {};
   for (const x of r.rejected) rejected[x.reason] = (rejected[x.reason] ?? 0) + 1;
   if (!r.kept.length && !candidates.length) throw new AiError('The model found nothing worth highlighting. Try again, or say what to look for (e.g. "highlight the definitions").');
-  return { kept: r.kept.map((k) => ({ ...k, rect: k.rects.length ? bounds(k.rects) : undefined })), proposed: candidates.length, rejected };
+  return {
+    kept: r.kept.map((k) => ({ ...k, rect: k.rects.length ? bounds(k.rects) : undefined })),
+    proposed: candidates.length,
+    rejected,
+    leftOut: r.rejected.map((x) => ({ quote: x.cand.quote, reason: x.reason })),
+  };
 }
 
 // ---------- questions ----------

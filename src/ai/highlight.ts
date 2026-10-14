@@ -5,7 +5,7 @@
 
 import type { Rect } from '../fs/sidecar';
 import { tokens } from './retrieve';
-import type { DocModel } from './structure';
+import { fold, type DocModel } from './structure';
 import { matchForm, type PageText } from './text';
 
 export interface Candidate {
@@ -110,7 +110,8 @@ function similar(a: string, b: string): boolean {
 export function highlightBudget(m: DocModel, focused: boolean): number {
   const chars = m.blocks.reduce((n, b) => n + b.text.length, 0);
   const pages = m.paged ? m.pageCount : Math.max(1, Math.round(chars / 2500));
-  const density = m.type === 'slides' ? 0.5 : m.type === 'course' ? 1 : 0.8;
+  // an exam's every question is a requirement; slides repeat themselves
+  const density = m.type === 'slides' ? 0.5 : m.type === 'exam' ? 1.6 : m.type === 'course' ? 1 : 0.8;
   const n = Math.round(pages * density) + 2;
   return Math.max(focused ? 2 : 3, Math.min(focused ? 8 : 12, n));
 }
@@ -142,7 +143,7 @@ export function selectHighlights(
     const blockWords = b.text.split(/\s+/).filter(Boolean).length;
     if (text.length < 12) reject('too short');
     else if (words > MAX_WORDS) reject('too long');
-    else if (blockWords > 30 && text.length >= b.text.length * 0.85) reject('whole paragraph');
+    else if (blockWords > 30 && text.length >= b.text.length * 0.85 && /[.!?;]\s+\S/.test(b.text.trim())) reject('whole paragraph'); // a one-sentence paragraph is precise enough
     else if (!(c.importance >= o.minImportance)) reject('low importance');
     else if (c.category === 'example' && !o.allowExamples) reject('example');
     else {
@@ -158,10 +159,25 @@ export function selectHighlights(
 
   // Most important first; then the more fundamental kind; then reading order.
   valid.sort((a, b) => b.importance - a.importance || (RANK[a.category] ?? 3) - (RANK[b.category] ?? 3) || a.blockIndex - b.blockIndex || a.start - b.start);
+  // Coverage first: the best important point of each section (summary sections only repeat the
+  // rest), then the remaining ones by rank. A main part of the document is never left unmarked
+  // while another gets several highlights.
+  const recap = (sec: number) => sec >= 0 && /^(a retenir|resume|summary|key points?|en resume|bilan|l ?essentiel|recap)/.test(fold(m.sections[sec].title));
+  const firsts = new Map<number, Accepted>();
+  for (const v of valid) {
+    const sec = m.blocks[v.blockIndex].section;
+    if (v.importance >= 4 && !recap(sec) && !firsts.has(sec)) firsts.set(sec, v);
+  }
+  // after that, a point from a recap section loses ties to the original passage
+  const rest = valid.filter((v) => ![...firsts.values()].includes(v));
+  const score = (v: Accepted) => v.importance - (recap(m.blocks[v.blockIndex].section) ? 1 : 0);
+  rest.sort((a, b) => score(b) - score(a));
+  const order = [...firsts.values(), ...rest];
+
   const kept: Accepted[] = [];
   const perSection = new Map<number, number>();
   const sectionCap = Math.max(2, Math.ceil(o.budget / 2));
-  for (const v of valid) {
+  for (const v of order) {
     const dup = kept.some((k) => (k.page === v.page && k.start < v.end && v.start < k.end) || similar(k.text, v.text));
     if (dup) {
       rejected.push({ cand: v, reason: 'duplicate' });
