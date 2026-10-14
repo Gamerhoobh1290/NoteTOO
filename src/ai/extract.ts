@@ -8,6 +8,8 @@ import { loadPdf } from '../lib/pdf';
 import { readSheets } from '../lib/sheets';
 import type { PageText, TextSpan } from './text';
 
+export type TextFormat = 'pdf' | 'markdown' | 'docx' | 'sheet' | 'text' | 'code';
+
 export type AiDoc =
   | {
       kind: 'text';
@@ -18,9 +20,13 @@ export type AiDoc =
       layout?: PageText[];
       /** text was cut at `maxChars` */
       truncated: boolean;
+      /** what the text came from: decides how its structure is read */
+      format: TextFormat;
     }
   | { kind: 'image'; images: string[]; scanned: boolean }
   | { kind: 'none'; reason: string };
+
+export type TextDoc = Extract<AiDoc, { kind: 'text' }>;
 
 export interface ReadOptions {
   /** stop reading after this many characters (e.g. a short snippet for organizing) */
@@ -84,6 +90,7 @@ async function pdfPageText(doc: PDFDocumentProxy, n: number): Promise<PageText> 
         start,
         end: text.length,
         rect: { x: tx[4] / vp.width, y: (tx[5] - fontH) / vp.height, w: (it.width * vp.scale) / vp.width, h: (fontH * 1.2) / vp.height },
+        size: Math.round(fontH * 10) / 10,
       });
     }
     text += it.hasEOL ? '\n' : ' ';
@@ -130,10 +137,34 @@ async function readPdf(file: File, o: ReadOptions): Promise<AiDoc> {
       }
       return { kind: 'image', images, scanned: true };
     }
-    return { kind: 'text', pages: layout.map((p) => p.text), paged: true, layout, truncated };
+    return { kind: 'text', pages: layout.map((p) => p.text), paged: true, layout, truncated, format: 'pdf' };
   } finally {
     void task.destroy();
   }
+}
+
+/**
+ * A docx (as mammoth's HTML) as Markdown-like text, so its structure survives: `#` headings,
+ * `-` list items, and `|` tables. Images and styling are dropped.
+ */
+function docxHtmlToText(html: string): string {
+  const body = new DOMParser().parseFromString(html, 'text/html').body;
+  const out: string[] = [];
+  const clean = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  for (const el of Array.from(body.children)) {
+    const tag = el.tagName.toLowerCase();
+    if (/^h[1-6]$/.test(tag)) out.push(`${'#'.repeat(Number(tag[1]))} ${clean(el)}`);
+    else if (tag === 'ul' || tag === 'ol') {
+      out.push(Array.from(el.querySelectorAll(':scope > li'), (li, i) => `${tag === 'ol' ? `${i + 1}.` : '-'} ${clean(li)}`).join('\n'));
+    } else if (tag === 'table') {
+      const rows = Array.from(el.querySelectorAll('tr'), (tr) => `| ${Array.from(tr.children, (td) => clean(td).replace(/\|/g, '/')).join(' | ')} |`);
+      if (rows.length) out.push([rows[0], `| ${rows[0].split(' | ').map(() => '---').join(' | ')} |`, ...rows.slice(1)].join('\n'));
+    } else {
+      const t = clean(el);
+      if (t) out.push(t);
+    }
+  }
+  return out.join('\n\n');
 }
 
 function cut(text: string, max?: number): { text: string; truncated: boolean } {
@@ -150,9 +181,9 @@ export async function readForAi(file: File, o: ReadOptions = {}): Promise<AiDoc>
       return { kind: 'image', images: [await imageDataUrl(file)], scanned: false };
     case 'docx': {
       const mammoth = (await import('mammoth')).default;
-      const res = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
-      const c = cut(res.value, o.maxChars);
-      return { kind: 'text', pages: [c.text], paged: false, truncated: c.truncated };
+      const res = await mammoth.convertToHtml({ arrayBuffer: await file.arrayBuffer() });
+      const c = cut(docxHtmlToText(res.value), o.maxChars);
+      return { kind: 'text', pages: [c.text], paged: false, truncated: c.truncated, format: 'docx' };
     }
     case 'sheet': {
       const sheets = await readSheets(file, o.signal);
@@ -160,14 +191,14 @@ export async function readForAi(file: File, o: ReadOptions = {}): Promise<AiDoc>
         .map((s) => `## Sheet "${s.name}"\n` + s.rows.map((r) => r.join(' | ').replace(/( \| )+$/, '')).filter((l) => l.trim()).join('\n'))
         .join('\n\n');
       const c = cut(text, o.maxChars);
-      return { kind: 'text', pages: [c.text], paged: false, truncated: c.truncated || sheets.some((s) => s.totalRows > s.rows.length) };
+      return { kind: 'text', pages: [c.text], paged: false, truncated: c.truncated || sheets.some((s) => s.totalRows > s.rows.length), format: 'sheet' };
     }
     case 'text':
     case 'markdown':
     case 'code': {
       const max = o.maxChars ?? 2_000_000;
       const c = cut(await file.slice(0, max * 4).text(), max);
-      return { kind: 'text', pages: [c.text], paged: false, truncated: c.truncated || file.size > max * 4 };
+      return { kind: 'text', pages: [c.text], paged: false, truncated: c.truncated || file.size > max * 4, format: kind === 'markdown' ? 'markdown' : kind === 'code' ? 'code' : 'text' };
     }
     case 'video':
     case 'audio':

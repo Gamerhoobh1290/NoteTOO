@@ -248,6 +248,11 @@ function Message({ m }: { m: AiMessage }) {
           ))}
         </ol>
       )}
+      {m.status === 'done' && !!m.sources?.length && (
+        <p className="ai-sources" title={m.sources.join('\n')}>
+          Based on {m.sources.map((s) => `“${s}”`).join(', ')}
+        </p>
+      )}
       {m.status === 'stopped' && <p className="muted hint">Stopped.</p>}
       {m.status === 'done' && m.text && (
         <div className="ai-msg-actions">

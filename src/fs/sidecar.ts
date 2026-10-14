@@ -31,8 +31,10 @@ interface AnnotationBase {
 }
 export interface AreaAnnotation extends AnnotationBase {
   type: 'area';
-  /** normalized 0-1, relative to the page/image */
+  /** normalized 0-1, relative to the page/image; the bounding box when `rects` is set */
   rect: Rect;
+  /** text highlights: one rectangle per line (optional; older versions only read `rect`) */
+  rects?: Rect[];
 }
 export interface PinAnnotation extends AnnotationBase {
   type: 'pin';
@@ -75,6 +77,13 @@ function str(v: unknown, what: string): string {
   return v;
 }
 
+function parseRect(r: unknown): Rect {
+  if (!isObj(r)) throw new SidecarError('rect is not an object');
+  const x = clamp01(num(r.x, 'rect.x'));
+  const y = clamp01(num(r.y, 'rect.y'));
+  return { x, y, w: Math.min(1 - x, clamp01(num(r.w, 'rect.w'))), h: Math.min(1 - y, clamp01(num(r.h, 'rect.h'))) };
+}
+
 function parseAnnotation(a: unknown, i: number): Annotation {
   if (!isObj(a)) throw new SidecarError(`annotation ${i} is not an object`);
   const createdAt = str(a.createdAt ?? new Date(0).toISOString(), 'createdAt');
@@ -88,13 +97,8 @@ function parseAnnotation(a: unknown, i: number): Annotation {
   };
   if (a.type === 'area') {
     if (!isObj(a.rect)) throw new SidecarError(`annotation ${i} has no rect`);
-    const x = clamp01(num(a.rect.x, 'rect.x'));
-    const y = clamp01(num(a.rect.y, 'rect.y'));
-    return {
-      ...base,
-      type: 'area',
-      rect: { x, y, w: Math.min(1 - x, clamp01(num(a.rect.w, 'rect.w'))), h: Math.min(1 - y, clamp01(num(a.rect.h, 'rect.h'))) },
-    };
+    const rects = Array.isArray(a.rects) ? a.rects.slice(0, 50).map(parseRect) : [];
+    return { ...base, type: 'area', rect: parseRect(a.rect), ...(rects.length ? { rects } : {}) };
   }
   if (a.type === 'pin') {
     if (!isObj(a.point)) throw new SidecarError(`annotation ${i} has no point`);

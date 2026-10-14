@@ -3,7 +3,7 @@ import { stripThinking } from './client';
 import { parseShowLinks } from './guide';
 import { InvalidAnswer, extractJson } from './json';
 import { parseProposals, planChanges } from './organize';
-import { chunkPages, findQuote, locateQuote, type PageText } from './text';
+import { findQuote } from './text';
 
 describe('findQuote', () => {
   const text = 'Chapitre 1\nDéfinition : une primitive de f sur I est une fonction F dérivable telle que F’ = f.\nExemple…';
@@ -22,48 +22,6 @@ describe('findQuote', () => {
   it('returns null for text that is not there', () => {
     expect(findQuote(text, 'le théorème de Pythagore')).toBeNull();
     expect(findQuote(text, 'Ch')).toBeNull();
-  });
-});
-
-describe('locateQuote', () => {
-  // Two lines; the PDF splits words into separate items.
-  const page: PageText = {
-    page: 1,
-    text: 'Théorème de Rolle Si f est continue\nalors il existe c',
-    spans: [
-      { start: 0, end: 17, rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.02 } },
-      { start: 18, end: 35, rect: { x: 0.42, y: 0.2, w: 0.3, h: 0.02 } },
-      { start: 36, end: 52, rect: { x: 0.1, y: 0.23, w: 0.25, h: 0.02 } },
-    ],
-  };
-
-  it('returns the box around the spans of the quote', () => {
-    const r = locateQuote(page, 'Si f est continue alors il existe c')!;
-    expect(r.x).toBeCloseTo(0.1 - 0.004);
-    expect(r.y).toBeCloseTo(0.2 - 0.004);
-    expect(r.x + r.w).toBeCloseTo(0.72 + 0.004);
-    expect(r.y + r.h).toBeCloseTo(0.25 + 0.004);
-  });
-
-  it('returns null when the quote is not on the page', () => {
-    expect(locateQuote(page, 'intégrale de Riemann')).toBeNull();
-  });
-});
-
-describe('chunkPages', () => {
-  it('groups pages under the budget and marks page numbers', () => {
-    const chunks = chunkPages(['a'.repeat(40), 'b'.repeat(40), 'c'.repeat(40)], 120, true);
-    expect(chunks.map((c) => [c.from, c.to])).toEqual([
-      [1, 2],
-      [3, 3],
-    ]);
-    expect(chunks[0].text).toContain('[Page 2]');
-  });
-
-  it('cuts a page longer than the budget and skips empty pages', () => {
-    const chunks = chunkPages(['', 'x'.repeat(250)], 100, false);
-    expect(chunks).toHaveLength(3);
-    expect(chunks.every((c) => c.from === 2 && c.text.length <= 100)).toBe(true);
   });
 });
 

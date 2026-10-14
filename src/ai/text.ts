@@ -1,5 +1,5 @@
 // Pure text helpers for the AI features (unit-tested): page text with positions, finding a
-// quoted passage on a PDF page, and splitting long documents into chunks.
+// quoted passage, and the text budget of a request.
 
 import type { Rect } from '../fs/sidecar';
 
@@ -8,6 +8,8 @@ export interface TextSpan {
   start: number;
   end: number;
   rect: Rect;
+  /** font size in PDF points (scale 1), used to recognize headings */
+  size?: number;
 }
 export interface PageText {
   /** 1-based */
@@ -60,51 +62,11 @@ export function findQuote(text: string, quote: string): { start: number; end: nu
   return null;
 }
 
-/** Bounding box of a quoted passage on a PDF page, or null if the passage is not on it. */
-export function locateQuote(p: PageText, quote: string): Rect | null {
-  const r = findQuote(p.text, quote);
-  if (!r) return null;
-  const hit = p.spans.filter((s) => s.end > r.start && s.start < r.end);
-  if (!hit.length) return null;
-  const pad = 0.004;
-  const x0 = Math.max(0, Math.min(...hit.map((s) => s.rect.x)) - pad);
-  const y0 = Math.max(0, Math.min(...hit.map((s) => s.rect.y)) - pad);
-  const x1 = Math.min(1, Math.max(...hit.map((s) => s.rect.x + s.rect.w)) + pad);
-  const y1 = Math.min(1, Math.max(...hit.map((s) => s.rect.y + s.rect.h)) + pad);
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-}
-
 export interface Chunk {
   /** first and last page (1-based) in this chunk */
   from: number;
   to: number;
   text: string;
-}
-
-/**
- * Groups pages into chunks of at most `budget` characters, each page marked with
- * "[Page n]". A page longer than the budget is cut into several chunks.
- */
-export function chunkPages(pages: string[], budget: number, paged: boolean): Chunk[] {
-  const out: Chunk[] = [];
-  let cur: Chunk | null = null;
-  pages.forEach((raw, i) => {
-    const n = i + 1;
-    const body = raw.trim();
-    if (!body) return;
-    for (let off = 0; off < body.length; off += budget) {
-      const piece = (paged ? `[Page ${n}]\n` : '') + body.slice(off, off + budget);
-      if (cur && cur.text.length + piece.length + 2 <= budget) {
-        cur.text += '\n\n' + piece;
-        cur.to = n;
-      } else {
-        if (cur) out.push(cur);
-        cur = { from: n, to: n, text: piece };
-      }
-    }
-  });
-  if (cur) out.push(cur);
-  return out;
 }
 
 /** Characters of document text that fit in one request, leaving room for instructions and the answer. */

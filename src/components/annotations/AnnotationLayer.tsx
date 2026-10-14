@@ -24,6 +24,7 @@ export interface AnnotationProps {
 }
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+const box = (r: Rect) => ({ left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` });
 
 /**
  * Overlay positioned over one page/image. Everything is in percent of the page, so it
@@ -87,12 +88,15 @@ export function AnnotationLayer({ page, a }: { page: number; a: AnnotationProps 
             },
           };
           return x.type === 'area' ? (
-            <div
-              key={x.id + (flashing ? `-${a.flash!.n}` : '')}
-              {...common}
-              className={cls('annot-area', x.color, a.selectedId === x.id && 'selected', flashing && 'flash')}
-              style={{ left: `${x.rect.x * 100}%`, top: `${x.rect.y * 100}%`, width: `${x.rect.w * 100}%`, height: `${x.rect.h * 100}%` }}
-            />
+            // A text highlight is drawn line by line; an area highlight is one box.
+            (x.rects ?? [x.rect]).map((r, i) => (
+              <div
+                key={x.id + i + (flashing ? `-${a.flash!.n}` : '')}
+                {...common}
+                className={cls('annot-area', x.color, a.selectedId === x.id && 'selected', flashing && 'flash')}
+                style={box(r)}
+              />
+            ))
           ) : (
             <button
               key={x.id + (flashing ? `-${a.flash!.n}` : '')}
@@ -109,20 +113,20 @@ export function AnnotationLayer({ page, a }: { page: number; a: AnnotationProps 
         ?.filter((x) => x.page === page)
         .map((x) => {
           const flashing = a.flash?.id === x.id;
-          return (
+          return x.rects.map((r, i) => (
             <div
-              key={x.id + (flashing ? `-${a.flash!.n}` : '')}
+              key={x.id + i + (flashing ? `-${a.flash!.n}` : '')}
               data-annot-id={x.id}
               title={`AI suggestion: ${x.why}`}
               className={cls('annot-area ai-suggestion', a.selectedId === x.id && 'selected', flashing && 'flash')}
-              style={{ left: `${x.rect.x * 100}%`, top: `${x.rect.y * 100}%`, width: `${x.rect.w * 100}%`, height: `${x.rect.h * 100}%` }}
+              style={box(r)}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 a.onSelect(x.id);
               }}
             />
-          );
+          ));
         })}
       {draft && (
         <div

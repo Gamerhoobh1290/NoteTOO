@@ -105,7 +105,7 @@ export function FileView({ path }: { path: string }) {
           ...s,
           annotations: [
             ...s.annotations,
-            ...picked.map((x): Annotation => ({ id: newId(), type: 'area', page: x.page, rect: x.rect, color: AI_COLOR, comment: x.why, createdAt: t, updatedAt: t })),
+            ...picked.map((x): Annotation => ({ id: newId(), type: 'area', page: x.page, rect: x.rect, rects: x.rects, color: AI_COLOR, comment: x.why, createdAt: t, updatedAt: t })),
           ],
         }));
       }

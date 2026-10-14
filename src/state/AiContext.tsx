@@ -1,23 +1,35 @@
 // AI assistant state (in memory only): the conversation, the running task, highlight
-// suggestions waiting for review, and the organize review. Nothing here touches disk except
-// "Save to notes" and applying an organize plan, both on explicit user action.
+// suggestions waiting for review, the organize review, and what the assistant knows about the
+// session (documents read, files opened recently, the text selected in the open file). Nothing
+// here touches disk except "Save to notes" and applying an organize plan, both on explicit action.
 
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AiError, type ChatMessage } from '../ai/client';
-import type { AiDoc, ReadOptions } from '../ai/extract';
+import { detectIntent, highlightFocus, resolveDocs } from '../ai/context';
+import type { ReadOptions } from '../ai/extract';
 import { planChanges, type Plan, type Proposal } from '../ai/organize';
 import { notesFor, placeOf } from '../ai/place';
 import { getAiSettings, isConfigured, type AiSettings } from '../ai/settings';
 import * as tasks from '../ai/tasks';
-import type { KeyPoint } from '../ai/tasks';
+import type { DocInfo, Profile } from '../ai/tasks';
 import { inputBudget } from '../ai/text';
 import { ConflictError, type Fs } from '../fs/fsService';
 import { SCRATCHPAD, baseName, classify, isInside, splitPath } from '../fs/paths';
-import { newId, type Rect } from '../fs/sidecar';
+import { loadSidecar, newId, type Rect } from '../fs/sidecar';
 import { fileKind, formatSize } from '../lib/fileKinds';
 import { confirmDialog, errorMessage, toast } from '../lib/ui';
 import { useApp } from './AppContext';
 import { flushAllDocs } from './useDiskDoc';
+
+export interface KeyPoint {
+  id: string;
+  /** 1-based page (1 for files without pages) */
+  page: number;
+  quote: string;
+  why: string;
+  /** PDF only: where the quote is on the page */
+  rect?: Rect;
+}
 
 export interface AiMessage {
   id: string;
@@ -29,7 +41,9 @@ export interface AiMessage {
   title?: string;
   /** where "Save to notes" appends the answer */
   notesPath?: string;
-  keyPoints?: { path: string; points: (KeyPoint & { id: string })[] };
+  keyPoints?: { path: string; points: KeyPoint[] };
+  /** files the answer was based on */
+  sources?: string[];
   /** open AI settings from an error */
   settingsHint?: boolean;
 }
@@ -37,7 +51,10 @@ export interface AiMessage {
 export interface Suggestion {
   id: string;
   page: number;
+  /** bounding box */
   rect: Rect;
+  /** one per line of the quoted text */
+  rects: Rect[];
   why: string;
   quote: string;
 }
@@ -80,9 +97,21 @@ async function appendToNote(fs: Fs, path: string, text: string) {
 }
 
 const MAX_ORGANIZE_FILES = 400;
+/** Documents kept read and analyzed (per file version) during the session. */
+const CACHE_SIZE = 8;
+/** At most this many documents go into one answer. */
+const MAX_DOCS = 3;
 
 /** File reading pulls in pdf.js, mammoth and SheetJS: load it on first AI use, not at startup. */
 const readForAi = async (file: File, o: ReadOptions) => (await import('../ai/extract')).readForAi(file, o);
+const buildModel = async (...a: Parameters<typeof import('../ai/structure').buildModel>) => (await import('../ai/structure')).buildModel(...a);
+
+interface Cached {
+  /** path + modified time + size: a changed file gets a new entry */
+  key: string;
+  info: DocInfo;
+  profile?: Promise<Profile | null>;
+}
 
 function useAiState() {
   const app = useApp();
@@ -93,9 +122,36 @@ function useAiState() {
   const [focusSuggestion, setFocusSuggestion] = useState<{ path: string; id: string; n: number } | null>(null);
   const [organize, setOrganize] = useState<OrganizeState | null>(null);
   const busyRef = useRef<Busy | null>(null);
-  const docCache = useRef<{ key: string; doc: AiDoc } | null>(null);
+  const cache = useRef(new Map<string, Cached>());
+  /** files viewed this session, most recent first */
+  const recent = useRef<string[]>([]);
+  /** documents the last answer was about (for follow-up questions) */
+  const lastDocs = useRef<string[]>([]);
+  /** text last selected in an open file */
+  const selection = useRef<{ path: string; text: string } | null>(null);
   const appRef = useRef(app);
   appRef.current = app;
+
+  // Session context: which files were opened, and what is selected in the open one.
+  const viewPath = app.view.kind === 'file' ? app.view.path : null;
+  useEffect(() => {
+    if (!viewPath) return;
+    recent.current = [viewPath, ...recent.current.filter((p) => p !== viewPath)].slice(0, 10);
+    if (selection.current?.path !== viewPath) selection.current = null;
+  }, [viewPath]);
+  useEffect(() => {
+    const onSel = () => {
+      const s = document.getSelection();
+      const node = s?.anchorNode;
+      const el = node instanceof Element ? node : node?.parentElement;
+      const v = appRef.current.view;
+      if (!s || s.isCollapsed || v.kind !== 'file' || !el?.closest('.fileview-body')) return;
+      const text = s.toString().trim();
+      if (text.length > 3) selection.current = { path: v.path, text };
+    };
+    document.addEventListener('selectionchange', onSel);
+    return () => document.removeEventListener('selectionchange', onSel);
+  }, []);
 
   const setBusy = (b: Busy | null) => {
     busyRef.current = b;
@@ -139,15 +195,36 @@ function useAiState() {
     },
   });
 
-  /** Reads a file for the AI, reusing the last read while the file is unchanged. */
-  const docFor = useCallback(async (path: string, signal: AbortSignal): Promise<AiDoc> => {
+  /** A file read and analyzed for the AI; reused while the file is unchanged on disk. */
+  const docFor = useCallback(async (path: string, signal: AbortSignal): Promise<Cached> => {
     const fs = appRef.current.fs!;
     const file = await fs.readFile(path);
     const key = `${path}|${file.lastModified}|${file.size}`;
-    if (docCache.current?.key === key) return docCache.current.doc;
+    const hit = cache.current.get(path);
+    if (hit?.key === key) {
+      cache.current.delete(path);
+      cache.current.set(path, hit); // most recently used last
+      return hit;
+    }
     const doc = await readForAi(file, { signal });
-    docCache.current = { key, doc };
-    return doc;
+    const info: DocInfo = { path, name: baseName(path), doc, model: doc.kind === 'text' ? await buildModel(baseName(path), doc) : undefined };
+    const entry: Cached = { key, info };
+    cache.current.delete(path);
+    cache.current.set(path, entry);
+    while (cache.current.size > CACHE_SIZE) cache.current.delete(cache.current.keys().next().value!);
+    return entry;
+  }, []);
+
+  /** The document with its profile (one cached AI call per file version; a failed one is not fatal). */
+  const withProfile = useCallback(async (entry: Cached, ctx: tasks.TaskCtx): Promise<DocInfo> => {
+    if (!entry.info.model || !entry.info.model.blocks.length) return entry.info;
+    entry.profile ??= tasks.profileDoc(ctx, entry.info).catch((e) => {
+      entry.profile = undefined; // try again next time
+      if (ctx.signal.aborted) throw e;
+      return null;
+    });
+    const profile = await entry.profile;
+    return { ...entry.info, profile };
   }, []);
 
   /** Runs an answer-producing task as a new assistant message (streamed). */
@@ -155,7 +232,7 @@ function useAiState() {
     async (
       label: string,
       msg: Pick<AiMessage, 'title' | 'notesPath'>,
-      work: (ctx: tasks.TaskCtx) => Promise<string | { text: string; keyPoints?: AiMessage['keyPoints'] }>,
+      work: (ctx: tasks.TaskCtx) => Promise<string | Partial<AiMessage>>,
       userText?: string,
     ) => {
       const started = await begin(label);
@@ -184,14 +261,15 @@ function useAiState() {
         end(ac);
       }
     },
-    [begin, docFor],
+    [begin],
   );
 
   const summarize = useCallback(
     (path: string) =>
-      runAnswer('Summarize', { title: `Summary · ${baseName(path)}`, notesPath: notesFor(classify(path)?.subject) }, async (ctx) =>
-        tasks.summarize(ctx, baseName(path), await docFor(path, ctx.signal)),
-      ),
+      runAnswer('Summarize', { title: `Summary · ${baseName(path)}`, notesPath: notesFor(classify(path)?.subject) }, async (ctx) => ({
+        text: await tasks.summarize(ctx, (await docFor(path, ctx.signal)).info),
+        sources: [baseName(path)],
+      })),
     [runAnswer, docFor],
   );
 
@@ -201,8 +279,9 @@ function useAiState() {
         'Explain',
         { title: `${passage ? 'Passage explained' : 'Explanation'} · ${baseName(path)}`, notesPath: notesFor(classify(path)?.subject) },
         async (ctx) => {
-          const doc = await docFor(path, ctx.signal);
-          return passage ? tasks.explainPassage(ctx, baseName(path), doc, passage) : tasks.explain(ctx, baseName(path), doc);
+          const info = (await docFor(path, ctx.signal)).info;
+          lastDocs.current = [path];
+          return { text: passage ? await tasks.explainPassage(ctx, info, passage) : await tasks.explain(ctx, info), sources: [baseName(path)] };
         },
         passage ? `Explain: “${passage.length > 220 ? passage.slice(0, 220) + '…' : passage}”` : undefined,
       ),
@@ -210,60 +289,123 @@ function useAiState() {
   );
 
   const highlight = useCallback(
-    (path: string) =>
-      runAnswer('Highlight important', { title: `Key points · ${baseName(path)}`, notesPath: notesFor(classify(path)?.subject) }, async (ctx) => {
-        const doc = await docFor(path, ctx.signal);
-        const points = (await tasks.findHighlights(ctx, baseName(path), doc)).map((p) => ({ ...p, id: newId() }));
-        const placed = points.filter((p) => p.rect);
-        if (placed.length) {
-          setSuggestions((all) => ({
-            ...all,
-            [path]: placed.map((p) => ({ id: p.id, page: p.page, rect: p.rect!, why: p.why, quote: p.quote })),
-          }));
-          appRef.current.setPanels({ annotations: true });
-        }
-        const list = points.map((p) => `- **“${p.quote}”**${p.rect ? ` (p. ${p.page})` : ''}: ${p.why}`).join('\n');
-        const intro = placed.length
-          ? `Suggested ${placed.length} highlight${placed.length > 1 ? 's' : ''} (purple, dashed). Keep or discard them in the annotations panel.`
-          : `Key points of this file:`;
-        return { text: `${intro}\n\n${list}`, keyPoints: { path, points } };
-      }),
-    [runAnswer, docFor],
+    (path: string, focus = '', userText?: string) =>
+      runAnswer(
+        'Highlight important',
+        { title: `${focus ? 'Highlights' : 'Key points'} · ${baseName(path)}`, notesPath: notesFor(classify(path)?.subject) },
+        async (ctx) => {
+          const entry = await docFor(path, ctx.signal);
+          const info = await withProfile(entry, ctx);
+          // The user's own highlights: not proposed again, and never covered by a suggestion.
+          const existing =
+            info.doc.kind === 'text' && info.doc.layout
+              ? (await loadSidecar(appRef.current.fs!, path)).sidecar.annotations.filter((a) => a.type === 'area').map((a) => ({ page: a.page, rect: a.rect }))
+              : [];
+          const r = await tasks.findHighlights(ctx, info, { focus, existing });
+          lastDocs.current = [path];
+          const points: KeyPoint[] = r.kept.map((k) => ({ id: newId(), page: k.page, quote: k.text, why: k.why, rect: k.rect }));
+          const placed = r.kept.map((k, i) => ({ k, id: points[i].id })).filter((x) => x.k.rects.length);
+          if (placed.length) {
+            setSuggestions((all) => ({
+              ...all,
+              [path]: placed.map(({ k, id }) => ({ id, page: k.page, rect: k.rect!, rects: k.rects, why: k.why, quote: k.text })),
+            }));
+            appRef.current.setPanels({ annotations: true });
+          }
+          const skipped = Object.entries(r.rejected)
+            .map(([reason, n]) => `${n} ${reason}`)
+            .join(', ');
+          const note = r.proposed > points.length ? `\n\n_${r.proposed} passages were proposed; ${points.length} kept${skipped ? ` (left out: ${skipped})` : ''}._` : '';
+          const list = points.map((p) => `- **“${p.quote}”**${p.rect ? ` (p. ${p.page})` : ''}: ${p.why}`).join('\n');
+          const intro = !points.length
+            ? 'Nothing in this file passed the quality bar for a highlight' + (focus ? ` for “${focus}”.` : '.')
+            : placed.length
+              ? `Suggested ${placed.length} highlight${placed.length > 1 ? 's' : ''} (purple, dashed). Keep or discard them in the annotations panel.`
+              : 'Key points of this file:';
+          return { text: `${intro}${note}\n\n${list}`, keyPoints: { path, points }, sources: [baseName(path)] };
+        },
+        userText,
+      ),
+    [runAnswer, docFor, withProfile],
   );
 
   const ask = useCallback(
-    (question: string) => {
-      const place = placeOf(appRef.current.view);
+    async (question: string) => {
+      const a = appRef.current;
+      const place = placeOf(a.view);
+      const current = place.kind === 'file' ? place.path : undefined;
+      const intent = detectIntent(question);
+
+      // "Highlight the definitions" in the chat runs the highlighter with that objective.
+      if (intent === 'highlight' && current && !['video', 'audio', 'image', 'other'].includes(fileKind(place.label))) {
+        return highlight(current, highlightFocus(question), question);
+      }
+
+      const index = (await a.ensureIndex().catch(() => [])).filter((e) => e.kind === 'file').map((e) => e.path);
+      const resolved = resolveDocs(question, { current, recent: recent.current, index, lastDocs: lastDocs.current });
+      if (resolved.ambiguous) {
+        setMessages((ms) => [
+          ...ms,
+          { id: newId(), role: 'user', text: question },
+          {
+            id: newId(),
+            role: 'assistant',
+            status: 'done',
+            text: `Several files match. Which one do you mean?\n\n${resolved.ambiguous!.map((p) => `- ${p}`).join('\n')}\n\nOpen it, or name it more precisely.`,
+          },
+        ]);
+        a.setPanels({ ai: true, scratchpad: false });
+        return;
+      }
       const history: ChatMessage[] = [
         ...messages.filter((m) => m.status !== 'error' && m.text).map((m) => ({ role: m.role, content: m.text })),
         { role: 'user', content: question },
       ];
+      const sel = selection.current?.path === current ? selection.current?.text : undefined;
       return runAnswer(
         'Answer',
         { notesPath: notesFor(place.subject) },
         async (ctx) => {
-          let file: { name: string; doc: AiDoc } | null = null;
-          if (place.kind === 'file' && place.path && fileKind(place.label) !== 'other') {
+          const docs: DocInfo[] = [];
+          const unreadable: string[] = [];
+          for (const p of resolved.paths.slice(0, MAX_DOCS)) {
+            if (fileKind(baseName(p)) === 'other') {
+              unreadable.push(baseName(p));
+              continue;
+            }
             try {
-              file = { name: place.label, doc: await docFor(place.path, ctx.signal) };
-            } catch {
-              /* answer without the file */
+              const entry = await docFor(p, ctx.signal);
+              docs.push(entry.info.model && entry.info.model.blocks.length ? await withProfile(entry, ctx) : entry.info);
+            } catch (e) {
+              if (ctx.signal.aborted) throw e;
+              unreadable.push(baseName(p));
             }
           }
+          lastDocs.current = docs.map((d) => d.path);
           const where =
             place.kind === 'file' ? `viewing the file "${place.path}"` : place.kind === 'subject' ? `on the page of the subject "${place.subject}"` : 'on the home page (list of subjects)';
-          return tasks.answer(ctx, history, where, file);
+          const text = await tasks.answer(ctx, {
+            history,
+            where,
+            intent,
+            docs,
+            unreadable,
+            selection: sel,
+            recent: recent.current.filter((p) => !docs.some((d) => d.path === p)).slice(0, 5).map(baseName),
+          });
+          return { text, sources: docs.map((d) => d.name) };
         },
         question,
       );
     },
-    [messages, runAnswer, docFor],
+    [messages, runAnswer, docFor, withProfile, highlight],
   );
 
   const stop = useCallback(() => busyRef.current?.ac.abort(), []);
   const clear = useCallback(() => {
     busyRef.current?.ac.abort();
     setMessages([]);
+    lastDocs.current = [];
   }, []);
 
   const saveToNotes = useCallback(async (m: AiMessage) => {

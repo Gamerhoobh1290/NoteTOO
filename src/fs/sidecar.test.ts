@@ -61,6 +61,19 @@ describe('parseSidecar / serializeSidecar', () => {
   it('accepts a minimal file', () => {
     expect(parseSidecar('{}', 'f')).toEqual(emptySidecar('f'));
   });
+
+  it('keeps per-line rectangles of text highlights, next to the bounding box older versions read', () => {
+    const s = structuredClone(sample);
+    const rects = [
+      { x: 0.1, y: 0.3, w: 0.7, h: 0.02 },
+      { x: 0.1, y: 0.33, w: 0.3, h: 0.02 },
+    ];
+    s.annotations[0] = { ...s.annotations[0], type: 'area', rect: { x: 0.1, y: 0.3, w: 0.7, h: 0.05 }, rects } as Sidecar['annotations'][0];
+    const back = parseSidecar(serializeSidecar(s), s.file);
+    expect(back).toEqual(s);
+    // a file written by 1.0 (no rects) still reads the same
+    expect(parseSidecar(serializeSidecar(sample), sample.file).annotations[0]).not.toHaveProperty('rects');
+  });
 });
 
 describe('loadSidecar', () => {

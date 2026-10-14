@@ -2465,6 +2465,14 @@ textarea:focus {
   color: var(--ai);
   margin-bottom: 6px;
 }
+.ai-sources {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ai-msg-actions {
   display: flex;
   gap: 14px;
