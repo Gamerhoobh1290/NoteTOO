@@ -59,6 +59,14 @@ and start the updater with `NOTETOO_UPDATE_FEED=http://127.0.0.1:8765/latest.jso
 `latest.json` still points at GitHub, so for a fully local test, sign a manifest whose `url` points at the local
 server. A test feed must still be signed with the release key.
 
+## Where the updater lives
+
+NoteTOO's installer (electron-builder NSIS) stops every process whose path starts with NoteTOO's program folder,
+compared as plain text, and the uninstaller of the version being replaced does the same. `…\Programs\NoteTOO Updater`
+would match `…\Programs\NoteTOO`, so the updater installs to `…\Programs\Updater for NoteTOO`
+(`build/updater-installer.nsh`) and refuses to update from a folder that would match. Keep any new default
+folder name from starting with "NoteTOO".
+
 ## What an update keeps
 
 The installer replaces only the program folder. Notes, annotations and the scratchpad live in the user's school
