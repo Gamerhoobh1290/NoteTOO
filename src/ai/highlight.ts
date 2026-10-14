@@ -39,6 +39,8 @@ export type RejectReason =
   | 'already highlighted'
   | 'over budget';
 
+// the prompt asks for 4 to 35 words; a bare list item ("- l'intensité lumineuse") is too thin alone
+const MIN_WORDS = 4;
 const MAX_WORDS = 40;
 const RANK: Record<string, number> = { definition: 0, theorem: 0, formula: 0, property: 1, 'key-fact': 1, conclusion: 1, method: 2, warning: 2, other: 3, example: 4 };
 
@@ -139,9 +141,9 @@ export function selectHighlights(
       continue;
     }
     const text = b.text.slice(r.start, r.end);
-    const words = text.split(/\s+/).filter(Boolean).length;
+    const words = text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
     const blockWords = b.text.split(/\s+/).filter(Boolean).length;
-    if (text.length < 12) reject('too short');
+    if (text.length < 12 || words < MIN_WORDS) reject('too short');
     else if (words > MAX_WORDS) reject('too long');
     else if (blockWords > 30 && text.length >= b.text.length * 0.85 && /[.!?;]\s+\S/.test(b.text.trim())) reject('whole paragraph'); // a one-sentence paragraph is precise enough
     else if (!(c.importance >= o.minImportance)) reject('low importance');
@@ -184,7 +186,8 @@ export function selectHighlights(
       continue;
     }
     const sec = m.blocks[v.blockIndex].section;
-    if (kept.length >= o.budget || (perSection.get(sec) ?? 0) >= sectionCap) {
+    // a summary section restates the rest: one point from it is enough
+    if (kept.length >= o.budget || (perSection.get(sec) ?? 0) >= (recap(sec) ? 1 : sectionCap)) {
       rejected.push({ cand: v, reason: 'over budget' });
       continue;
     }

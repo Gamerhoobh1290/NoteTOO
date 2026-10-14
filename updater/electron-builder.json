@@ -5,7 +5,7 @@
   "extraMetadata": {
     "name": "notetoo-updater",
     "productName": "NoteTOO Updater",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Updates the installed NoteTOO.",
     "main": "out/updater/main.mjs"
   },
@@ -27,6 +27,7 @@
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
     "shortcutName": "NoteTOO Updater",
+    "include": "build/updater-installer.nsh",
     "installerIcon": "build/icon.ico",
     "uninstallerIcon": "build/icon.ico",
     "artifactName": "NoteTOO-Updater-Setup-${version}.${ext}"

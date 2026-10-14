@@ -3,11 +3,12 @@
 // Nothing runs in the background: the updater does its work while its window is open.
 
 import { app, BrowserWindow, ipcMain, nativeTheme, net, shell, type IpcMainInvokeEvent } from 'electron';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { UpdaterState } from './bridge.js';
-import { TrustError, compareVersions, downloadVerified, type Install, type Manifest, verifyManifest } from './core.mjs';
+import { TrustError, compareVersions, downloadVerified, stoppedByInstaller, type Install, type Manifest, verifyManifest } from './core.mjs';
 import { FEED_URL, RELEASES_PAGE } from './feed.mjs';
 import { RELEASE_PUBLIC_KEY } from './releaseKey.mjs';
 import { closeGracefully, findInstall, launch, runInstaller, runningPids } from './system.mjs';
@@ -97,6 +98,13 @@ async function check() {
 
 async function update() {
   if (!manifest || !install || busy) return;
+  if (stoppedByInstaller(app.getPath('exe'), install.dir)) {
+    return fail(
+      'NoteTOO Updater is in the wrong folder',
+      `NoteTOO Updater is installed in "${path.dirname(app.getPath('exe'))}", whose path begins with NoteTOO's folder "${install.dir}", so NoteTOO's installer would close the updater midway. Reinstall NoteTOO Updater in its default folder, then try again. Nothing was changed.`,
+      'detect',
+    );
+  }
   const ac = new AbortController();
   busy = ac;
   set({ phase: 'downloading', progress: { done: 0, total: manifest.size } });
@@ -161,6 +169,9 @@ async function installNow() {
     );
   }
   install = now;
+  // Installed and checked: the downloaded installer is no longer needed.
+  await rm(installer, { force: true }).catch(() => {});
+  installer = null;
   set({ phase: 'done', installed: { version: now.version, dir: now.dir }, step: undefined });
 }
 

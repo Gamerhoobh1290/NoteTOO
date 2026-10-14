@@ -67,6 +67,18 @@ describe('selectHighlights', () => {
     expect(r.rejected.map((x) => x.reason).sort()).toEqual(['example', 'low importance']);
   });
 
+  it('refuses fragments under four words (the prompt asks for 4 to 35), but keeps formulas', () => {
+    const list = buildModel('l.pdf', doc([page(1, ['Les facteurs limitants sont :', '- l’intensité lumineuse ;', '- la concentration en CO2 de l’air ;', '', 'Équation bilan : 6 CO2 + 6 H2O -> C6H12O6 + 6 O2'])]));
+    const at = (needle: string) => list.blocks.find((b) => b.text.includes(needle))!.id;
+    const r = selectHighlights(
+      [cand(at('intensité'), '- l’intensité lumineuse', { category: 'key-fact' }), cand(at('C6H12O6'), '6 CO2 + 6 H2O -> C6H12O6 + 6 O2', { category: 'formula' })],
+      list,
+      { ...opts, layout: undefined },
+    );
+    expect(r.kept.map((k) => k.category)).toEqual(['formula']);
+    expect(r.rejected[0].reason).toBe('too short');
+  });
+
   it('refuses to highlight a whole long paragraph', () => {
     const b = m.blocks.find((x) => x.text.startsWith('La phase claire'))!;
     const r = selectHighlights([cand(b.id, b.text)], m, opts);
@@ -134,6 +146,22 @@ describe('coverage', () => {
       { budget: 2, minImportance: 3, allowExamples: false, existing: [] },
     );
     expect(r.kept.map((k) => k.text)).toEqual(['La photolyse de l’eau libère le dioxygène', 'La RuBisCO fixe le CO2 dans le stroma']);
+  });
+
+  it('keeps at most one point from a summary section, even with budget to spare', () => {
+    const recap = buildModel('r.md', { ...md, pages: [md.pages[0] + '\n\nLa RuBisCO travaille dans le stroma du chloroplaste.\n\nLes thylakoïdes fournissent ATP et NADPH au cycle.'] });
+    const at = (needle: string) => recap.blocks.find((b) => b.text.includes(needle))!.id;
+    const r = selectHighlights(
+      [
+        cand(at('RuBisCO fixe'), 'La RuBisCO fixe le CO2 dans le stroma', { importance: 5 }),
+        cand(at('pas du CO2'), 'Le dioxygène vient de la photolyse de l’eau, pas du CO2', { importance: 5, category: 'conclusion' }),
+        cand(at('travaille dans le stroma'), 'La RuBisCO travaille dans le stroma du chloroplaste', { importance: 5, category: 'conclusion' }),
+        cand(at('fournissent ATP'), 'Les thylakoïdes fournissent ATP et NADPH au cycle', { importance: 5, category: 'conclusion' }),
+      ],
+      recap,
+      { budget: 8, minImportance: 3, allowExamples: false, existing: [] },
+    );
+    expect(r.kept.map((k) => k.text)).toEqual(['La RuBisCO fixe le CO2 dans le stroma', 'Le dioxygène vient de la photolyse de l’eau, pas du CO2']);
   });
 });
 

@@ -97,6 +97,17 @@ describe('pickInstall', () => {
   });
 });
 
+describe('stoppedByInstaller', () => {
+  const dir = 'C:\\Users\\A\\AppData\\Local\\Programs\\NoteTOO';
+  it('matches the way the NSIS installer does: a plain, case-insensitive prefix', () => {
+    expect(core.stoppedByInstaller('C:\\Users\\A\\AppData\\Local\\Programs\\NoteTOO Updater\\NoteTOO Updater.exe', dir)).toBe(true);
+    expect(core.stoppedByInstaller('c:\\users\\a\\appdata\\local\\programs\\notetoo-updater\\x.exe', dir)).toBe(true);
+  });
+  it('is safe in the default updater folder', () => {
+    expect(core.stoppedByInstaller('C:\\Users\\A\\AppData\\Local\\Programs\\Updater for NoteTOO\\NoteTOO Updater.exe', dir)).toBe(false);
+  });
+});
+
 describe('downloadVerified', () => {
   let dir: string;
   const body = Buffer.from('installer bytes, pretend this is an exe');

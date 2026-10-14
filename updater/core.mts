@@ -102,6 +102,15 @@ export function pickInstall(entries: unknown, exists: (file: string) => boolean)
   return null;
 }
 
+/**
+ * NoteTOO's installer (electron-builder NSIS) stops every process whose path starts with its
+ * install folder, as plain text: "…\Programs\NoteTOO" also matches "…\Programs\NoteTOO Updater\…".
+ * An updater living at such a path would be stopped by the installer it is running.
+ */
+export function stoppedByInstaller(updaterExe: string, installDir: string): boolean {
+  return updaterExe.toLowerCase().startsWith(installDir.toLowerCase());
+}
+
 type FetchLike = (url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
 
 async function sha256Of(file: string): Promise<string> {
