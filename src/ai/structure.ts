@@ -48,6 +48,8 @@ interface Line {
   size?: number;
   y?: number;
   h?: number;
+  /** right edge of the line (PDF) */
+  right?: number;
 }
 
 /** Lower case, no accents: for keyword tests. */
@@ -78,8 +80,41 @@ function tagOf(text: string): BlockTag | undefined {
   return TAGS.find(([re]) => re.test(t))?.[1];
 }
 
-/** Splits a page text into lines, with exact offsets, and (PDF) font size and position. */
+/**
+ * Splits a page text into lines with exact offsets. For PDFs, lines come from the spans'
+ * positions (pdf.js does not always mark line ends), with their font size and position.
+ */
 function linesOf(text: string, page: number, layout?: PageText): Line[] {
+  if (layout?.spans.length) {
+    const out: Line[] = [];
+    let group: PageText['spans'] = [];
+    const flush = () => {
+      if (!group.length) return;
+      const raw = text.slice(group[0].start, group[group.length - 1].end);
+      const lead = raw.length - raw.trimStart().length;
+      const t = raw.trim();
+      out.push({
+        page,
+        start: group[0].start + lead,
+        end: group[0].start + lead + t.length,
+        text: t,
+        size: Math.max(...group.map((s) => s.size ?? 0)) || undefined,
+        y: Math.min(...group.map((s) => s.rect.y)),
+        h: Math.max(...group.map((s) => s.rect.h)),
+        right: Math.max(...group.map((s) => s.rect.x + s.rect.w)),
+      });
+      group = [];
+    };
+    for (const s of layout.spans) {
+      if (!text.slice(s.start, s.end).trim()) continue;
+      const last = group[group.length - 1];
+      const mid = (r: typeof s.rect) => r.y + r.h / 2;
+      if (last && (text.slice(last.end, s.start).includes('\n') || Math.abs(mid(s.rect) - mid(last.rect)) > Math.min(s.rect.h, last.rect.h) * 0.5)) flush();
+      group.push(s);
+    }
+    flush();
+    return out;
+  }
   const out: Line[] = [];
   let at = 0;
   for (const raw of text.split('\n')) {
@@ -180,8 +215,19 @@ export function buildModel(name: string, doc: TextDoc): DocModel {
 
   let fenced = false;
   let prev: Line | null = null;
+  let lastHeading: Line | null = null;
   for (const lines of pages) {
     const pageMax = Math.max(0, ...lines.filter((l) => l.size).map((l) => l.size!));
+    // Body text of this page: its usual line pitch and right margin tell paragraphs apart.
+    const bodyLines = lines.filter((l) => l.size && Math.abs(l.size - body) < 0.6 && l.y !== undefined);
+    const pitches = bodyLines
+      .slice(1)
+      .map((l, i) => l.y! - bodyLines[i].y!)
+      .filter((d) => d > 0 && d < 0.1)
+      .sort((a, b) => a - b);
+    const pitch = pitches.length ? pitches[Math.floor(pitches.length / 2)] : 0;
+    const rights = bodyLines.map((l) => l.right ?? 0).sort((a, b) => a - b);
+    const rightEdge = rights.length ? rights[Math.floor(rights.length * 0.9)] : 1;
     for (const l of lines) {
       const t = l.text;
       if (format === 'code') {
@@ -216,11 +262,19 @@ export function buildModel(name: string, doc: TextDoc): DocModel {
       }
       if (format === 'pdf' && l.size && body && l.size >= body * 1.15 && looksLikeHeadingText(t)) {
         flush();
-        addSection(t, sizeLevel(l.size), l.page);
+        // a heading wrapped onto a second line continues the same heading
+        if (lastHeading?.size === l.size && lastHeading.page === l.page && l.y! - lastHeading.y! < (lastHeading.h ?? 0) * 1.8) sections[sections.length - 1].title += ` ${t}`;
+        else addSection(t, sizeLevel(l.size), l.page);
+        lastHeading = l;
         prev = null;
         continue;
       }
-      const isolated = !prev && (format === 'text' || format === 'pdf');
+      lastHeading = null;
+      // a vertical gap before the line ends the paragraph above (PDFs have no blank lines)
+      const gap = !!prev && prev.y !== undefined && l.y !== undefined && (pitch ? l.y - prev.y > pitch * 1.3 : !!prev.h && l.y - prev.y - prev.h > prev.h * 0.7);
+      // …and so does a previous line that stops short of the margin at the end of a sentence
+      const shortEnd = !!prev && prev.right !== undefined && prev.right < rightEdge - 0.12 && /[.!?:;)»"]$/.test(prev.text);
+      const isolated = (!prev || gap) && (format === 'text' || format === 'pdf');
       if (isolated && looksLikeHeadingText(t) && KEYWORD_HEADING.test(fold(t)) && t.length <= 80 && (format === 'text' || (l.size ?? 0) >= body)) {
         flush();
         addSection(t, 2, l.page);
@@ -240,8 +294,7 @@ export function buildModel(name: string, doc: TextDoc): DocModel {
       else if (CAPTION.test(t)) add('caption', l, false);
       else if (LIST.test(t)) add('list', l, false);
       else {
-        const gap = prev && prev.y !== undefined && l.y !== undefined && prev.h ? l.y - prev.y - prev.h > prev.h * 0.7 : false;
-        const continues = !!cur && !gap && !tagOf(t) && (cur.kind === 'paragraph' || cur.kind === 'list');
+        const continues = !!cur && !gap && !shortEnd && !tagOf(t) && (cur.kind === 'paragraph' || cur.kind === 'list');
         if (continues) cur!.lines.push(l);
         else add('paragraph', l, false);
       }

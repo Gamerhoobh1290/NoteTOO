@@ -85,6 +85,45 @@ describe('buildModel (PDF)', () => {
     for (const b of m.blocks) expect(course.kind === 'text' && course.pages[b.page - 1].slice(b.start, b.end)).toBe(b.text);
   });
 
+  it('finds lines from positions when pdf.js does not mark line ends', () => {
+    // Title and first line come as one run of text "…photosynthèse La photosynthèse permet…".
+    const title = 'Chapitre 3 - La photosynthèse';
+    const body = 'La photosynthèse permet aux plantes de produire leur matière organique.';
+    const p: PageText = {
+      page: 1,
+      text: `${title} ${body}`,
+      spans: [
+        { start: 0, end: title.length, rect: { x: 0.1, y: 0.06, w: 0.5, h: 0.03 }, size: 20 },
+        { start: title.length + 1, end: title.length + 1 + body.length, rect: { x: 0.1, y: 0.12, w: 0.8, h: 0.015 }, size: 11 },
+      ],
+    };
+    const mm = buildModel('c.pdf', pdf([p]));
+    expect(mm.sections.map((s) => s.title)).toEqual([title]);
+    expect(mm.blocks.map((b) => b.text)).toEqual([body]);
+  });
+
+  it('joins a heading wrapped on two lines, and splits paragraphs that end short of the margin', () => {
+    const lines: [string, number, number, number][] = [
+      // text, size, y, width
+      ['Lecture 4: The Origins of the Cold War', 21, 0.06, 0.8],
+      ['(1945–1953)', 21, 0.092, 0.2],
+      ['At the Yalta and Potsdam conferences, the Allies disagreed over the future of', 11, 0.15, 0.8],
+      ['Germany and Eastern Europe.', 11, 0.168, 0.35],
+      ['In March 1946, Churchill warned that an iron curtain had descended.', 11, 0.186, 0.6],
+      ['The Truman Doctrine committed the United States to support free peoples', 11, 0.204, 0.8],
+      ['resisting subjugation.', 11, 0.222, 0.3],
+    ];
+    let text = '';
+    const spans: PageText['spans'] = [];
+    for (const [s, size, y, w] of lines) {
+      spans.push({ start: text.length, end: text.length + s.length, rect: { x: 0.1, y, w, h: size / 700 }, size });
+      text += s + ' ';
+    }
+    const mm = buildModel('lecture.pdf', pdf([{ page: 1, text, spans }]));
+    expect(mm.sections.map((s) => s.title)).toEqual(['Lecture 4: The Origins of the Cold War (1945–1953)']);
+    expect(mm.blocks.map((b) => b.text.slice(0, 12))).toEqual(['At the Yalta', 'In March 194', 'The Truman D']);
+  });
+
   it('guesses a course', () => {
     expect(m.type).toBe('course');
   });
