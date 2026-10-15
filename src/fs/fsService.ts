@@ -374,6 +374,8 @@ export function createFs(root: FileSystemDirectoryHandle, onAccessLost?: (e: unk
     /** Desktop app only: Windows integration for files of this folder. */
     desktop: nativeId && desktop
       ? {
+          /** The main process's id for this folder (Receive from phone writes into it). */
+          rootId: nativeId,
           /** Streams from disk (audio/video) instead of reading the whole file. */
           fileUrl: (path: string) => desktop!.fileUrl(nativeId, path),
           /** Opens in the program Windows associates with the file. Resolves to an error message or null. */

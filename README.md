@@ -34,7 +34,7 @@ Other scripts:
 
 | Command | What it does |
 |---|---|
-| `npm test` | Unit tests (path mirroring, sidecar read/write, file operations on an in-memory folder, AI answer validation and organize planning), plus the desktop disk backend on a real temporary folder |
+| `npm test` | Unit tests (path mirroring, sidecar read/write, file operations on an in-memory folder, AI answer validation and organize planning), plus the desktop disk backend and the Receive-from-phone server on a real temporary folder |
 | `npm run sample` | Generates `./sample-school/`, a throwaway test folder (`-- --force` regenerates it) |
 
 ## Windows desktop app
@@ -72,13 +72,40 @@ What is different from the browser version:
 - Right-click in text fields for cut / copy / paste and spelling suggestions.
 
 **Where the desktop app keeps its own settings:** `%APPDATA%\NoteTOO\settings.json` (window size, recent folders, last
-folder, theme). The AI settings live in the app's local storage in the same `%APPDATA%\NoteTOO` folder. Your notes and
+folder, theme, the Receive-from-phone port). The AI settings live in the app's local storage in the same `%APPDATA%\NoteTOO` folder. Your notes and
 annotations stay in your school folder exactly as in the browser version. Uninstalling keeps `%APPDATA%\NoteTOO`;
 delete it to reset the app.
 
 **Security:** the page has no Node.js access. It asks the main process (`electron/`) for disk operations by (opened
 folder, relative path), and the main process refuses any path outside the folder you opened. Links in notes and AI
 answers open in your default browser.
+
+### Receive from phone
+
+Send photos and videos from your phone into your folder in **original quality** (messaging apps recompress them),
+over your own Wi-Fi: no cloud, no account, nothing leaves your network.
+
+1. Click the **phone** button in the top bar and switch receiving on. The first time, Windows may ask whether
+   NoteTOO can use the network: allow it on **private networks**.
+2. On the phone (same Wi-Fi), scan the QR code with the camera, or open the address shown in Safari and type the
+   access key.
+3. Pick the folder ("Save in"; by default **Inbox** at the root of your folder, created when needed), then
+   **Choose photos & videos**. Each file shows its progress; failed ones have **Retry**.
+4. NoteTOO re-scans the folder as files arrive and says where they went; the dialog lists everything received.
+   Switch it off when you're done. It also stops when you close or switch folders, and when NoteTOO exits.
+
+- **iPhone, full quality:** in the photo picker, tap **Options** and choose **Format: Current**. With *Automatic*,
+  iOS may convert HEIC photos to JPEG before Safari hands them over.
+- Files are saved exactly as received (no resizing or re-encoding), through a temporary file, and never replace an
+  existing file: a name already taken becomes `name (1).ext`. Windows marks them as coming from the network, like
+  browser downloads, so it warns before running a program and opens Office files in Protected View.
+- The page can be added to the phone's Home Screen. The port stays the same between sessions; the key changes every
+  time you switch receiving on (or click **New key**), so the Home Screen app asks for it again.
+- **Security:** plain HTTP on your local network. The key keeps others on the network out (10 wrong keys lock that
+  device out for 10 minutes), but the traffic is not encrypted: don't use it on public Wi-Fi. The server only
+  answers on this PC's private network addresses, rejects other host names and cross-site requests, accepts files
+  up to 4 GB (keeping 1 GB of disk free), and only writes inside the opened folder (never in `.noteTOO` or hidden
+  folders, never through links that lead outside it).
 
 ## Pick your folder
 
@@ -245,7 +272,8 @@ Ollama's `OLLAMA_ORIGINS`.
 - **Dropping folders** from your PC (drop the files instead, or create a subfolder first).
 - By design (out of scope): text-selection highlighting, timestamped comments on audio/video, editing original files, OCR,
   accounts, a backend and real-time collaboration. The only network requests are the AI assistant's, to the server you
-  configure.
+  configure; the only network listener is Receive from phone (desktop app), on your local network and only while it is
+  switched on.
 
 ## Notes and limitations
 
@@ -267,6 +295,8 @@ electron/main.mts        desktop app: window, native folder dialog, app settings
 electron/disk.mts        desktop app: disk access for the opened folder (the trust boundary), atomic writes,
                          Recycle Bin, notetoo-file:// streaming with range requests
 electron/preload.cts     desktop app: the narrow window.notetoo bridge (contract: src/desktop/bridge.ts)
+electron/receive.mts     desktop app: Receive from phone, the LAN upload server (key, lockout, host check, streaming
+                         uploads into disk.mts); electron/receive-page.html is the page it serves to the phone
 src/
   fs/fsService.ts        the only module that touches the File System Access API
   fs/paths.ts            pure path rules: sections, ignore list, sidecar path mirroring, name validation

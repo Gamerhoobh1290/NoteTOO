@@ -7,6 +7,7 @@ import { desktop, type ThemeSource } from '../desktop/bridge';
 import { openMenu, shortcutsDialog, toast, type MenuItem } from '../lib/ui';
 import { useApp } from '../state/AppContext';
 import { cls } from './common';
+import { ReceiveButton } from './ReceiveDialog';
 
 const THEMES: { id: ThemeSource; label: string; icon: typeof Sun }[] = [
   { id: 'system', label: 'System', icon: Monitor },
@@ -128,6 +129,7 @@ export function TopBar() {
         >
           <RefreshCw size={17} />
         </button>
+        <ReceiveButton />
         <button
           className={cls('btn ai-toggle', app.panels.ai && 'active')}
           title="AI assistant (Alt+4)"

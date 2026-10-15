@@ -2,7 +2,7 @@
 // No Node.js reaches the page; every call goes through IPC to the main process, which checks it.
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DesktopBridge } from '../src/desktop/bridge';
+import type { DesktopBridge, ReceiveState } from '../src/desktop/bridge';
 
 const FILE_SCHEME = 'notetoo-file'; // = disk.FILE_SCHEME (a sandboxed preload can only require 'electron')
 const invoke = ipcRenderer.invoke.bind(ipcRenderer);
@@ -33,6 +33,16 @@ const bridge: DesktopBridge = {
   showInFolder: (root, p) => invoke('shell:show-in-folder', root, p),
   getTheme: () => invoke('theme:get'),
   setTheme: (t) => invoke('theme:set', t),
+
+  receiveStart: (root) => invoke('receive:start', root),
+  receiveStop: () => invoke('receive:stop'),
+  receiveState: () => invoke('receive:state'),
+  receiveNewKey: () => invoke('receive:new-key'),
+  onReceiveState: (handler) => {
+    const listener = (_e: Electron.IpcRendererEvent, s: ReceiveState) => handler(s);
+    ipcRenderer.on('receive:state', listener);
+    return () => void ipcRenderer.removeListener('receive:state', listener);
+  },
 
   onOpenFolderRequest: (handler) => {
     const listener = (_e: Electron.IpcRendererEvent, p: string) => handler(p);

@@ -7,7 +7,8 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as disk from './disk.mjs';
-import type { RootInfo, ThemeSource } from '../src/desktop/bridge.js';
+import * as receive from './receive.mjs';
+import type { ReceivedFile, ReceiveState, RootInfo, ThemeSource } from '../src/desktop/bridge.js';
 
 const APP_ID = 'com.notetoo.desktop';
 /** Set by `npm run desktop:dev`: load the Vite dev server instead of the built files. */
@@ -37,6 +38,8 @@ interface Settings {
   recent: string[];
   theme: ThemeSource;
   window: { x?: number; y?: number; width: number; height: number; maximized: boolean };
+  /** Receive from phone: last port, reused so a phone's Home Screen bookmark keeps working. */
+  receivePort?: number;
 }
 const SETTINGS_FILE = () => path.join(app.getPath('userData'), 'settings.json');
 const MAX_RECENT = 8;
@@ -50,6 +53,7 @@ function loadSettings(): Settings {
       recent: Array.isArray(raw.recent) ? raw.recent.filter((p): p is string => typeof p === 'string').slice(0, MAX_RECENT) : [],
       theme: raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : 'system',
       window: { ...base.window, ...(typeof raw.window === 'object' ? raw.window : {}) },
+      receivePort: Number.isInteger(raw.receivePort) && raw.receivePort! > 1024 && raw.receivePort! < 65536 ? raw.receivePort : undefined,
     };
   } catch {
     return base; // first run, or a damaged file: start over (it holds no user data)
@@ -79,6 +83,8 @@ function rememberFolder(dir: string) {
 
 function openFolder(dir: string): RootInfo {
   const info = disk.openRoot(dir);
+  // Files sent from the phone must never land in a folder other than the one the dialog showed.
+  if (info.id !== filesRoot) void stopReceiving({ forget: true });
   settings.last = info.path;
   rememberFolder(info.path);
   return info;
@@ -121,6 +127,77 @@ function folderFromArgs(argv: string[]): string | null {
   );
 }
 let pendingFolder: string | null = null;
+
+// ---------- receive from phone ----------
+
+let receiver: receive.Receiver | null = null;
+let receiverRoot: string | null = null;
+let receiveError: string | null = null;
+/** Received while the current folder is open (kept when receiving is switched off), newest first. */
+let receivedFiles: ReceivedFile[] = [];
+/** The folder `receivedFiles` belong to. */
+let filesRoot: string | null = null;
+/** Starts and stops run one after another, so a folder switch can never race a start. */
+let receiveQueue: Promise<unknown> = Promise.resolve();
+function serial<T>(fn: () => Promise<T>): Promise<T> {
+  const next = receiveQueue.then(fn, fn);
+  receiveQueue = next.catch(() => {});
+  return next;
+}
+
+function receiveState(): ReceiveState {
+  return { running: !!receiver, urls: receiver?.urls ?? [], key: receiver?.key ?? null, files: receivedFiles, error: receiveError };
+}
+
+function pushReceiveState() {
+  if (win && !win.isDestroyed()) win.webContents.send('receive:state', receiveState());
+}
+
+const startReceiving = (rootId: string) => serial(() => start(rootId));
+const stopReceiving = (o: { forget?: boolean } = {}) => serial(() => stop(o));
+
+async function start(rootId: string): Promise<ReceiveState> {
+  if (receiver && receiverRoot === rootId) return receiveState();
+  await stop({ forget: rootId !== filesRoot });
+  receiveError = null;
+  const hosts = receive.lanAddresses();
+  if (!disk.rootExists(rootId)) receiveError = 'The folder is not available.';
+  else if (!hosts.length) receiveError = 'This PC is not connected to a Wi-Fi or local network.';
+  else {
+    try {
+      receiver = await receive.startReceiver({
+        rootId,
+        hosts,
+        port: settings.receivePort,
+        onFile: (f) => {
+          receivedFiles = [f, ...receivedFiles].slice(0, 500);
+          pushReceiveState();
+        },
+      });
+      receiverRoot = filesRoot = rootId;
+      if (settings.receivePort !== receiver.port) {
+        settings.receivePort = receiver.port;
+        saveSettings();
+      }
+    } catch (e) {
+      receiveError = `Could not start receiving: ${(e as Error).message}`;
+    }
+  }
+  pushReceiveState();
+  return receiveState();
+}
+
+async function stop({ forget = false }: { forget?: boolean }) {
+  const r = receiver;
+  receiver = null;
+  receiverRoot = null;
+  if (forget) {
+    receivedFiles = [];
+    filesRoot = null;
+  }
+  if (r) await r.close();
+  pushReceiveState();
+}
 
 // ---------- window ----------
 
@@ -334,9 +411,10 @@ function registerIpc() {
     updateJumpList();
     return settings.recent;
   });
-  handle('folder:close', () => {
+  handle('folder:close', async () => {
     settings.last = null;
     saveSettings();
+    await stopReceiving({ forget: true });
   });
   handle('folder:exists', (id: string) => disk.rootExists(id));
 
@@ -354,6 +432,19 @@ function registerIpc() {
 
   handle('shell:open-path', disk.openPath);
   handle('shell:show-in-folder', disk.showInFolder);
+
+  handle('receive:start', (root: string) => startReceiving(String(root)));
+  handle('receive:stop', async () => {
+    receiveError = null;
+    await stopReceiving();
+    return receiveState();
+  });
+  handle('receive:state', () => receiveState());
+  handle('receive:new-key', () => {
+    receiver?.newKey();
+    pushReceiveState();
+    return receiveState();
+  });
 
   handle('theme:get', () => settings.theme);
   handle('theme:set', (t: ThemeSource) => {
@@ -450,4 +541,10 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on('window-all-closed', () => app.quit());
+  // Unfinished uploads remove their temp files before NoteTOO exits.
+  app.on('will-quit', (e) => {
+    if (!receiver) return;
+    e.preventDefault();
+    void stopReceiving().finally(() => app.quit());
+  });
 }

@@ -36,6 +36,27 @@ export type DiskResult<T> = { ok: true; value: T } | { ok: false; name: DiskErro
 
 export type ThemeSource = 'system' | 'light' | 'dark';
 
+/** A file saved by "Receive from phone". */
+export interface ReceivedFile {
+  /** path inside the opened folder, '/'-separated */
+  path: string;
+  size: number;
+  /** ms since epoch */
+  at: number;
+}
+
+export interface ReceiveState {
+  running: boolean;
+  /** http://<LAN address>:<port>, best guess first */
+  urls: string[];
+  /** access key while running */
+  key: string | null;
+  /** received since the app started, newest first */
+  files: ReceivedFile[];
+  /** why the server could not start or stopped */
+  error: string | null;
+}
+
 export interface DesktopBridge {
   // ----- the opened folder -----
   /** Native folder dialog; opens the chosen folder (null when cancelled). */
@@ -78,6 +99,15 @@ export interface DesktopBridge {
   showInFolder(root: string, path: string): Promise<void>;
   getTheme(): Promise<ThemeSource>;
   setTheme(theme: ThemeSource): Promise<void>;
+
+  // ----- Receive from phone (LAN upload server; stops when the folder closes or changes) -----
+  receiveStart(root: string): Promise<ReceiveState>;
+  receiveStop(): Promise<ReceiveState>;
+  receiveState(): Promise<ReceiveState>;
+  /** Replaces the access key; phones using the old one must enter the new one. */
+  receiveNewKey(): Promise<ReceiveState>;
+  /** Pushed after every change: started, stopped, new key, file received. */
+  onReceiveState(handler: (state: ReceiveState) => void): () => void;
 
   /**
    * A folder was passed on the command line or picked from the taskbar jump list while running.

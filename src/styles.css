@@ -2904,3 +2904,152 @@ html.desktop .start-card {
 .recent-forget:focus-visible {
   opacity: 1;
 }
+
+/* receive from phone (desktop app) */
+.receive-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+.receive-dialog .dialog-body {
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+.receive-dialog p {
+  margin: 0;
+}
+.receive-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  width: fit-content;
+}
+.receive-switch input {
+  appearance: none;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--border-strong);
+  position: relative;
+  margin: 0;
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+.receive-switch input::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 150ms ease-out;
+}
+.receive-switch input:checked {
+  background: var(--accent);
+}
+.receive-switch input:checked::after {
+  transform: translateX(18px);
+}
+.receive-switch input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.receive-switch input:disabled {
+  opacity: 0.6;
+}
+.receive-error {
+  margin: 0;
+}
+.receive-connect {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.receive-qr {
+  width: 180px;
+  height: 180px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.receive-steps {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.receive-url {
+  user-select: all;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.receive-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.receive-key code {
+  font-size: 15px;
+  letter-spacing: 0.06em;
+}
+.receive-steps > .btn {
+  justify-self: start;
+}
+.receive-files h3 {
+  font-size: 14px;
+  margin: 0 0 6px;
+}
+.receive-files ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.receive-file {
+  display: grid;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.receive-file:hover,
+.receive-file:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+.receive-file > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.receive-file .muted {
+  font-size: 12px;
+}
+.receive-notes {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+.receive-warning {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.receive-warning svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--danger);
+}
+@media (max-width: 520px) {
+  .receive-connect {
+    grid-template-columns: 1fr;
+  }
+}

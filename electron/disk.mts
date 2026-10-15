@@ -198,7 +198,24 @@ export function writeChunk(writeId: string, data: Uint8Array) {
   });
 }
 
-export function commitWrite(writeId: string) {
+/** Puts the finished temp file in place without ever replacing an existing target. */
+async function placeExclusive(temp: string, target: string) {
+  try {
+    // A hard link fails with EEXIST when the target exists, so there is no check-then-write race.
+    await fsp.link(temp, target);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw e;
+    // File systems without hard links (FAT/exFAT drives): check, then rename.
+    if (existsSync(target)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+    await retryLocked(() => fsp.rename(temp, target));
+    return;
+  }
+  // The file is in place: a temp that stays locked is only a hidden leftover, not a failed write.
+  await retryLocked(() => fsp.rm(temp, { force: true })).catch(() => {});
+}
+
+/** `exclusive`: fail with InvalidModificationError instead of replacing an existing file. */
+export function commitWrite(writeId: string, opts?: { exclusive?: boolean } | null) {
   const s = writes.get(writeId);
   return run(s?.root ?? '', s?.target ?? '', async () => {
     const { handle, temp, target } = session(writeId);
@@ -206,7 +223,8 @@ export function commitWrite(writeId: string) {
     try {
       await handle.sync();
       await handle.close();
-      await retryLocked(() => fsp.rename(temp, target));
+      if (opts?.exclusive === true) await placeExclusive(temp, target);
+      else await retryLocked(() => fsp.rename(temp, target));
     } catch (e) {
       await handle.close().catch(() => {});
       await fsp.rm(temp, { force: true }).catch(() => {});

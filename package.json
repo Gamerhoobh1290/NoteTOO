@@ -36,6 +36,7 @@
     "mammoth": "^1.13.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.4.299",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
@@ -59,6 +60,9 @@
     "files": [
       "dist/**/*",
       "out/electron/**/*",
+      "out/src/fs/paths.js",
+      "electron/receive-page.html",
+      "build/icon.png",
       "package.json"
     ],
     "asar": true,

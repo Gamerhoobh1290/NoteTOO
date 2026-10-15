@@ -97,6 +97,23 @@ describe('desktop backend', () => {
     expect(read('_scratchpad.md')).toBe('new');
   });
 
+  it('exclusive commit never replaces an existing file', async () => {
+    const { info } = open();
+    const w = await disk.beginWrite(info.id, 'Maths/_notes.md');
+    if (!w.ok) throw new Error(w.message);
+    await disk.writeChunk(w.value, new TextEncoder().encode('x'));
+    expect(await disk.commitWrite(w.value, { exclusive: true })).toMatchObject({ ok: false, name: 'InvalidModificationError' });
+    expect(read('Maths/_notes.md')).toBe('# notes');
+    expect(readdirSync(path.join(dir, 'Maths')).some((n) => n.endsWith('.crswap'))).toBe(false);
+
+    const n = await disk.beginWrite(info.id, 'Maths/new.jpg');
+    if (!n.ok) throw new Error(n.message);
+    await disk.writeChunk(n.value, new TextEncoder().encode('JPG'));
+    expect(await disk.commitWrite(n.value, { exclusive: true })).toMatchObject({ ok: true });
+    expect(read('Maths/new.jpg')).toBe('JPG');
+    expect(readdirSync(path.join(dir, 'Maths')).some((n) => n.endsWith('.crswap'))).toBe(false);
+  });
+
   it('copies files in without overwriting, in chunks', async () => {
     const { fs } = open();
     const big = new Uint8Array(9 * 1024 * 1024).fill(7); // > one 8 MB chunk

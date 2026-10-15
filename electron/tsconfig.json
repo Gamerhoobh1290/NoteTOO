@@ -12,6 +12,6 @@
     "rootDir": "..",
     "outDir": "../out"
   },
-  "include": ["*.mts", "*.cts", "../src/desktop/bridge.ts"],
+  "include": ["*.mts", "*.cts", "../src/desktop/bridge.ts", "../src/fs/paths.ts"],
   "exclude": ["*.test.ts"]
 }
