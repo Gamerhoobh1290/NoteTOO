@@ -36,7 +36,9 @@ const samePath = (a: string, b: string) => path.resolve(a).toLowerCase() === pat
 
 /** Process IDs of the installed NoteTOO (all its Electron processes). */
 export async function runningPids(exe: string): Promise<number[]> {
-  const out = await powershell('Get-Process -Name NoteTOO -ErrorAction SilentlyContinue | Select-Object Id,Path | ConvertTo-Json -Compress');
+  // Filter instead of `Get-Process -Name`: that one makes PowerShell exit with code 1 when no NoteTOO
+  // runs (even with SilentlyContinue), which read as a failure. Real errors still fail.
+  const out = await powershell("Get-Process | Where-Object { $_.ProcessName -eq 'NoteTOO' } | Select-Object Id,Path | ConvertTo-Json -Compress");
   if (!out) return [];
   const list = ([] as { Id?: unknown; Path?: unknown }[]).concat(JSON.parse(out));
   return list.filter((p) => typeof p.Id === 'number' && typeof p.Path === 'string' && samePath(p.Path, exe)).map((p) => p.Id as number);

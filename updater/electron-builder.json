@@ -5,7 +5,7 @@
   "extraMetadata": {
     "name": "notetoo-updater",
     "productName": "NoteTOO Updater",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Updates the installed NoteTOO.",
     "main": "out/updater/main.mjs"
   },

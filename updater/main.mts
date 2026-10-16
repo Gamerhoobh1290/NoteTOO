@@ -130,14 +130,32 @@ async function update() {
   } finally {
     busy = null;
   }
-  if ((await runningPids(install.exe)).length) set({ phase: 'confirm-close' });
+  await proceedToInstall();
+}
+
+/** After a verified download: ask to close NoteTOO when it is open, otherwise install. */
+async function proceedToInstall() {
+  if (!install) return;
+  let open: number[];
+  try {
+    open = await runningPids(install.exe);
+  } catch (e) {
+    return fail('Could not check whether NoteTOO is open', `${e instanceof Error ? e.message : e} Nothing was installed.`, 'install');
+  }
+  if (open.length) set({ phase: 'confirm-close' });
   else await installNow();
 }
 
 async function closeAndInstall() {
   if (!install || state.phase !== 'confirm-close') return;
   set({ phase: 'closing' });
-  if (!(await closeGracefully(install.exe))) {
+  let closed: boolean;
+  try {
+    closed = await closeGracefully(install.exe);
+  } catch (e) {
+    return fail('Could not close NoteTOO', `${e instanceof Error ? e.message : e} Close NoteTOO yourself, then try again. Nothing was installed.`, 'install');
+  }
+  if (!closed) {
     return fail(
       'NoteTOO is still open',
       'NoteTOO did not close. It may be asking about changes it could not save. Switch to NoteTOO, deal with its message, then try again. Nothing was installed.',
@@ -180,7 +198,7 @@ function retry() {
   if (r === 'detect') return detect();
   if (r === 'check') return check();
   if (r === 'download') return update();
-  if (r === 'install') return installer && install ? (async () => ((await runningPids(install!.exe)).length ? set({ phase: 'confirm-close' }) : installNow()))() : update();
+  if (r === 'install') return installer && install ? proceedToInstall() : update();
 }
 
 // ---------- window and IPC ----------
@@ -195,7 +213,14 @@ function trusted(e: IpcMainInvokeEvent) {
 function handle(channel: string, fn: () => unknown) {
   ipcMain.handle(channel, async (e) => {
     if (!trusted(e)) throw new Error('Refused: untrusted sender.');
-    await fn();
+    try {
+      await fn();
+    } catch (err) {
+      // Whatever goes wrong, the window shows it with a way forward instead of staying on a step.
+      busy = null;
+      const retry = installer ? 'install' : manifest ? 'download' : install ? 'check' : 'detect';
+      fail('Something went wrong', `${err instanceof Error ? err.message : err} Nothing was changed.`, retry);
+    }
   });
 }
 
