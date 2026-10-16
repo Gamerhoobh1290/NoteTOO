@@ -11,7 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import * as path from 'node:path';
 import * as disk from './disk.mjs';
-import { isIgnored, validateName, withSuffix } from '../src/fs/paths.js';
+import { extName, isIgnored, validateName, withSuffix } from '../src/fs/paths.js';
 import type { ReceivedFile } from '../src/desktop/bridge.js';
 
 export const INBOX = 'Inbox';
@@ -24,6 +24,13 @@ const MAX_ACTIVE_UPLOADS = 3;
 const MAX_FOLDERS = 3000;
 const MAX_FOLDER_DEPTH = 6;
 const MAX_NAME = 150;
+/** Photos and videos only (what the feature is for): nothing a double-click would run. */
+const MEDIA = new Set(
+  ['jpg', 'jpeg', 'jpe', 'png', 'gif', 'webp', 'heic', 'heif', 'hif', 'avif', 'tif', 'tiff', 'bmp', 'dng',
+    'mov', 'mp4', 'm4v', '3gp', '3g2', 'avi', 'mkv', 'webm', 'mts', 'm2ts'],
+);
+/** A folder name uploads may go through: not hidden (.noteTOO, .git…) and not one NoteTOO reserves. */
+const allowedSegment = (s: string) => !s.startsWith('.') && validateName(s) === null;
 
 // ---------- access key ----------
 
@@ -236,7 +243,7 @@ export async function startReceiver(o: ReceiverOptions): Promise<Receiver> {
   async function destination(raw: string): Promise<{ rel: string; full: string }> {
     const rel = raw.split('/').filter(Boolean).join('/') || INBOX;
     const invalid = new HttpError(400, 'This folder cannot receive files.');
-    if (rel.split('/').some((s) => s.startsWith('.') || validateName(s) !== null)) throw invalid;
+    if (!rel.split('/').every(allowedSegment)) throw invalid;
     let full: string;
     try {
       full = disk.resolveIn(o.rootId, rel, false);
@@ -253,9 +260,10 @@ export async function startReceiver(o: ReceiverOptions): Promise<Receiver> {
       if (rel === INBOX && st) throw new HttpError(409, `Cannot create the ${INBOX} folder: a file named "${INBOX}" is in the way.`);
       throw new HttpError(404, 'This folder no longer exists. Reload the list.');
     }
-    // Junctions or links further up must not lead out of the opened folder.
+    // Check where the path really leads, not how it was typed: junctions or links must not lead out of the
+    // folder, and 8.3 short names ("NOTETO~1") or links must not lead into .noteTOO or other hidden folders.
     const [real, realRoot] = await Promise.all([fsp.realpath(full), fsp.realpath(rootFull)]);
-    if (!isWithin(real, realRoot)) throw invalid;
+    if (!isWithin(real, realRoot) || !path.relative(realRoot, real).split(path.sep).filter(Boolean).every(allowedSegment)) throw invalid;
     return { rel, full };
   }
 
@@ -281,10 +289,12 @@ export async function startReceiver(o: ReceiverOptions): Promise<Receiver> {
     if (activeUploads >= MAX_ACTIVE_UPLOADS) throw Object.assign(new HttpError(503, 'Busy with other files. Try again.'), { retryAfter: 2 });
     activeUploads++;
     try {
+      const name = sanitizeFileName(url.searchParams.get('name') ?? '');
+      if (!MEDIA.has(extName(name))) throw new HttpError(415, 'Only photos and videos can be sent.');
       const dest = await destination(url.searchParams.get('dir') ?? '');
       const { bavail, bsize } = await fsp.statfs(dest.full);
       if (size > bavail * bsize - inFlightBytes - FREE_SPACE_RESERVE) throw new HttpError(507, 'Not enough free space on the PC.');
-      const picked = await reserveName(dest.full, sanitizeFileName(url.searchParams.get('name') ?? ''));
+      const picked = await reserveName(dest.full, name);
       inFlightBytes += size;
       try {
         const rel = `${dest.rel}/${picked.name}`;

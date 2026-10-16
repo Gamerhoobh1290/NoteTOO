@@ -44,8 +44,8 @@ The user asked for implementation without an approval stop; decisions that would
   - `POST /api/upload?dir=<rel>&name=<name>` with the raw file as body (no multipart). `Content-Length` required
     (411). → `201 { path, name, size }` or `{ error }` with 400/404/409/413/429/503/507.
 - **Upload:** destination `dir` ('' = `Inbox`, created when missing) is resolved with `disk.resolveIn`, must be an
-  existing folder whose real path is inside the folder's real path (no junction escape), and not inside `.noteTOO`
-  or a dot-folder. Name sanitised (below), made unique (`name (1).ext`, NoteTOO's existing collision rule
+  existing folder whose real path is inside the folder's real path and, checked on that resolved path, not inside
+  `.noteTOO` or a dot-folder (no junction or 8.3 short-name bypass). Only photo/video extensions are accepted (415). Name sanitised (below), made unique (`name (1).ext`, NoteTOO's existing collision rule
   **(decision)**, reserved in-process so parallel uploads never pick the same name), then streamed chunk by chunk
   (with backpressure) into `disk.beginWrite` → `writeChunk` → `commitWrite(…, { exclusive: true })`. Exclusive
   commit = hard link temp → target (fails if the target exists) then remove temp; on file systems without hard

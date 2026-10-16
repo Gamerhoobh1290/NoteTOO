@@ -103,9 +103,9 @@ over your own Wi-Fi: no cloud, no account, nothing leaves your network.
   time you switch receiving on (or click **New key**), so the Home Screen app asks for it again.
 - **Security:** plain HTTP on your local network. The key keeps others on the network out (10 wrong keys lock that
   device out for 10 minutes), but the traffic is not encrypted: don't use it on public Wi-Fi. The server only
-  answers on this PC's private network addresses, rejects other host names and cross-site requests, accepts files
-  up to 4 GB (keeping 1 GB of disk free), and only writes inside the opened folder (never in `.noteTOO` or hidden
-  folders, never through links that lead outside it).
+  answers on this PC's private network addresses, rejects other host names and cross-site requests, accepts only
+  photos and videos up to 4 GB each (keeping 1 GB of disk free), and only writes inside the opened folder (never in
+  `.noteTOO` or hidden folders, never through links or short names that lead elsewhere).
 
 ## Pick your folder
 

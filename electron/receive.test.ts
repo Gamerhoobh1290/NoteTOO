@@ -1,5 +1,6 @@
 // "Receive from phone": the LAN upload server end to end on a real temporary folder and real sockets
 // (bound to 127.0.0.1 here; the app binds to the LAN addresses only).
+import { execSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import * as http from 'node:http';
@@ -261,8 +262,8 @@ describe('receiver', () => {
 
   it.runIf(process.platform === 'win32')('marks received files as coming from the network (Mark of the Web)', async () => {
     await start();
-    await upload('Maths', 'x.pdf', 'X');
-    expect(readFileSync(path.join(dir, 'Maths', 'x.pdf') + ':Zone.Identifier', 'utf8')).toMatch(/ZoneId=3/);
+    await upload('Maths', 'x.jpg', 'X');
+    expect(readFileSync(path.join(dir, 'Maths', 'x.jpg') + ':Zone.Identifier', 'utf8')).toMatch(/ZoneId=3/);
   });
 
   it('never overwrites: the same name gets a (1) suffix', async () => {
@@ -327,6 +328,43 @@ describe('receiver', () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it('refuses a junction inside the folder that leads into .noteTOO', async () => {
+    symlinkSync(path.join(dir, '.noteTOO'), path.join(dir, 'Maths', 'meta'), 'junction');
+    await start();
+    expect((await upload('Maths/meta/Maths', 'evil.jpg', 'X')).status).toBe(400);
+    expect(readdirSync(path.join(dir, '.noteTOO', 'Maths'))).toEqual(['x.annotations.json']);
+  });
+
+  // Windows 8.3 short names ("NOTETO~1" for ".noteTOO") exist only where the volume generates them.
+  const shortName = (full: string) => {
+    if (process.platform !== 'win32') return null;
+    try {
+      const out = execSync(`cmd /c for %I in ("${full}") do @echo %~snxI`, { encoding: 'utf8' }).trim();
+      return out && out.toLowerCase() !== path.basename(full).toLowerCase() ? out : null;
+    } catch {
+      return null;
+    }
+  };
+  it('refuses .noteTOO reached by its 8.3 short name', async (ctx) => {
+    const short = shortName(path.join(dir, '.noteTOO'));
+    if (!short) return ctx.skip();
+    await start();
+    expect((await upload(`${short}/Maths`, 'evil.jpg', 'X')).status).toBe(400);
+    expect(readdirSync(path.join(dir, '.noteTOO', 'Maths'))).toEqual(['x.annotations.json']);
+  });
+
+  it.each(['run.exe', 'notes.pdf', 'photo.jpg.exe', 'script.bat', 'page.html', 'noextension'])('refuses %j: only photos and videos', async (name) => {
+    await start();
+    const r = await upload('Maths', name, 'X');
+    expect(r.status).toBe(415);
+    expect(readdirSync(path.join(dir, 'Maths')).sort()).toEqual(['Cours', 'TD']);
+  });
+
+  it.each(['IMG_0001.HEIC', 'clip.MOV', 'raw.dng', 'pic.webp', 'video.mp4', 'old.3gp'])('accepts %j', async (name) => {
+    await start();
+    expect((await upload('Maths', name, 'X')).status).toBe(201);
   });
 
   it('refuses files over the size limit before writing anything', async () => {
