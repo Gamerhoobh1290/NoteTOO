@@ -38,14 +38,20 @@ describe.skipIf(!hasPython)('python guard', () => {
     ['writing .noteTOO', "open('.noteTOO/x.json', 'w')", /only write inside the school folder/],
     ['deleting', "import os; os.remove('Maths/a.txt')", /cannot delete/],
     ['renaming an existing file', "import os; os.rename('Maths/a.txt', 'Maths/c.txt')", /cannot move or rename/],
-    ['starting programs', "import subprocess; subprocess.run(['echo'])", /blocked in scripts \(subprocess.Popen\)/],
     ['the network', "import socket; socket.create_connection(('127.0.0.1', 9))", /network access is blocked/],
-    ['native code', "import ctypes; ctypes.CDLL(None)", /ctypes.dlopen/],
   ])('blocks %s', async (_name, code, err) => {
     const r = await run(code);
     expect(r.exitCode).toBe(126);
     expect(lastLine(r.stderr)).toMatch(/^NoteTOO guard stopped the script: /);
     expect(lastLine(r.stderr)).toMatch(err);
+  });
+
+  it('starting programs and reading other personal files fail with an error libraries can handle', async () => {
+    const r = await run(
+      "import subprocess, os\ntry:\n    subprocess.run(['echo', 'x'])\nexcept OSError as e:\n    print('refused:', e)\ntry:\n    open(os.path.expanduser('~/.bashrc'))\nexcept OSError as e:\n    print('refused:', e)\nprint('still running')",
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/refused: NoteTOO: starting programs is blocked[\s\S]*refused: NoteTOO: reading .* is blocked[\s\S]*still running/);
   });
 
   it('a blocked action ends the script: it cannot catch the error and carry on', async () => {

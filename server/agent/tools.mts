@@ -954,7 +954,7 @@ def({
       const ok = await ctx.approve({
         tool: 'run_python',
         title: net ? 'Run a script WITH internet access?' : 'Run a Python script on your PC?',
-        detail: `${(str(a, 'purpose', false) || 'No purpose given').replace(/[.!?\s]*$/, '.')} Read the code: it runs with your account's rights. NoteTOO's guard stops it if it writes outside your school folder, deletes, starts programs${net ? '' : ' or uses the internet'}, and backs up files it changes, but the guard is a safety net, not a sandbox.`,
+        detail: `${(str(a, 'purpose', false) || 'No purpose given').replace(/[.!?\s]*$/, '.')} Read the code: it runs with your account's rights. NoteTOO's guard blocks writing outside your school folder, deleting, starting programs${net ? '' : ' and using the internet'}, and backs up files it changes, but the guard is a safety net, not a sandbox.`,
         code,
       });
       if (!ok) return { ok: false, content: 'The user declined to run this script. Do it another way, or explain what is needed.', summary: 'declined by you' };

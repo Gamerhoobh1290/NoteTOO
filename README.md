@@ -457,9 +457,10 @@ sent to that provider.
   Every task is logged in `%APPDATA%\NoteTOO\agent-log.jsonl` (request, tools used, files changed).
 - **Python scripts** always show you their code and run only if you click **Allow** (or never: AI settings → Agent →
   *Never run scripts*). They run with your school folder as working directory, a time limit (60 s by default, the whole
-  process tree is stopped), capped output, and a guard (Python audit hooks) that stops a script as soon as it writes
-  outside the school folder, reads your other personal files, deletes, starts programs, loads native code or uses the
-  network without your approval; files a script changes are backed up first. The guard catches mistakes; it is **not a
+  process tree is stopped), capped output, and a guard (Python audit hooks): a script that writes outside the school
+  folder, deletes or renames existing files, or uses the network without your approval is stopped at once; starting
+  programs and reading your other personal files are refused (libraries can cope with that); files a script changes are
+  backed up first. The guard catches mistakes; it is **not a
   sandbox** (code in the same process can get around any Python-level guard, and scripts run with your account's
   rights), which is why there is no option to run scripts without seeing them. Install the libraries you want scripts
   to use (`py -m pip install pandas matplotlib python-docx openpyxl`).

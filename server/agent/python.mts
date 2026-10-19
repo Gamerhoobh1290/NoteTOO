@@ -4,14 +4,16 @@
 // The guard is a Python audit hook (PEP 578) installed before the script runs. It is a safety net
 // against mistakes, NOT a security boundary: code in the same process can defeat any Python-level
 // guard (for example by replacing the os.path functions it relies on). That is why every script is
-// shown to the user and runs only with their approval (tools.mts). A blocked action ends the script
-// at once (no exception, so no traceback hands the script the guard's frame). It:
+// shown to the user and runs only with their approval (tools.mts). A blocked change (writing outside,
+// deleting, renaming, network…) ends the script at once; starting programs and reading outside get
+// an ordinary error, because libraries probe for those and cope with a refusal. It:
 //  - allows writing only inside the school folder (never in .noteTOO) and the run's work folder,
 //    and copies every existing file to the backup folder before it is first changed;
 //  - blocks reading inside the user's home folder (keys, browser profiles…) except the school
 //    folder, the work folder and Python's own installation and packages;
-//  - blocks deleting files outside the work folder, starting programs, loading native code through
-//    ctypes, the Windows registry, and network access (unless the user approved network access).
+//  - blocks deleting files outside the work folder, starting programs, the Windows registry, and
+//    network access (unless the user approved network access). Native code (ctypes) is allowed:
+//    numpy needs it, and the guard is not a boundary anyway.
 // Each run has a time limit (the whole process tree is killed), capped output, and on Linux/macOS
 // a memory limit.
 
@@ -110,9 +112,8 @@ def _install():
         if inside(p, N_ROOT):
             written.add(os.path.relpath(orig, ROOT).replace(os.sep, '/'))
 
-    BLOCKED_EXEC = ('subprocess.Popen', 'os.system', 'os.exec', 'os.spawn', 'os.posix_spawn', 'os.startfile', 'os.fork',
-                    'os.forkpty', 'pty.spawn', 'os.kill', 'os.killpg', 'ctypes.dlopen', 'ctypes.dlsym', 'ctypes.call_function',
-                    'webbrowser.open', 'os.symlink', 'os.link', 'gc.get_objects', 'gc.get_referrers', 'gc.get_referents',
+    PROBES = ('subprocess.Popen', 'os.system', 'os.posix_spawn', 'os.spawn', 'os.startfile', 'webbrowser.open')
+    BLOCKED_EXEC = ('os.exec', 'os.fork', 'os.forkpty', 'pty.spawn', 'os.kill', 'os.killpg', 'os.symlink', 'os.link', 'gc.get_objects', 'gc.get_referrers', 'gc.get_referents',
                     'sys.setprofile', 'sys.settrace')
     NET_EVENTS = ('socket.connect', 'socket.sendto', 'socket.sendmsg', 'socket.bind', 'socket.getaddrinfo',
                   'socket.gethostbyname', 'socket.gethostbyaddr', 'urllib.Request', 'http.client.connect', 'ftplib.connect',
@@ -126,6 +127,12 @@ def _install():
             report()
         finally:
             os._exit(126)
+
+    def refuse(msg):
+        # Libraries probe for programs and config files and expect to cope with a failure: those get
+        # an ordinary, catchable error. (A script could then reach this frame; it could also simply
+        # replace the os functions the guard uses: the guard is a safety net, approval is the boundary.)
+        raise PermissionError('NoteTOO: ' + msg)
 
     def hook(event, args):
         if state['busy']:
@@ -143,7 +150,7 @@ def _install():
                     deny('scripts may only write inside the school folder: %s' % p)
                 changing(p, original(target))
             elif not readable(p):
-                deny('reading %s is blocked (outside the school folder)' % p)
+                refuse('reading %s is blocked (outside the school folder)' % p)
         elif event in ('os.remove', 'os.unlink', 'os.rmdir', 'shutil.rmtree'):
             p = real(args[0])
             if p is not None and not (scratch(p) or p in created):
@@ -163,6 +170,8 @@ def _install():
                 deny('scripts may only change things inside the school folder: %s' % p)
             if event == 'os.truncate' and p is not None:
                 changing(p, original(args[0]))
+        elif event.startswith(PROBES):
+            refuse('starting programs is blocked in scripts (%s)' % str.__str__(event))
         elif event.startswith(BLOCKED_EXEC):
             deny('this is blocked in scripts (%s)' % str.__str__(event))
         elif event.startswith('winreg.'):
