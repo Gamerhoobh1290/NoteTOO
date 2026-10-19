@@ -1,11 +1,11 @@
 // Python scripts the agent writes, run on the PC under guard: for work the built-in tools can't do
 // (calculations, data processing, charts, converting files with libraries the user has installed).
 //
-// The guard is a Python audit hook (PEP 578) installed before the script runs, its state kept in a
-// closure the script cannot reach (fresh __main__, no gc introspection). It is a safety net against
-// mistakes and against instructions smuggled into documents, NOT an OS sandbox: hostile code can get
-// around audit hooks (for example through a C extension), which is why scripts are shown to the
-// user for approval unless they chose otherwise. It:
+// The guard is a Python audit hook (PEP 578) installed before the script runs. It is a safety net
+// against mistakes, NOT a security boundary: code in the same process can defeat any Python-level
+// guard (for example by replacing the os.path functions it relies on). That is why every script is
+// shown to the user and runs only with their approval (tools.mts). A blocked action ends the script
+// at once (no exception, so no traceback hands the script the guard's frame). It:
 //  - allows writing only inside the school folder (never in .noteTOO) and the run's work folder,
 //    and copies every existing file to the backup folder before it is first changed;
 //  - blocks reading inside the user's home folder (keys, browser profiles…) except the school
@@ -119,7 +119,13 @@ def _install():
                   'smtplib.connect', 'poplib.connect', 'imaplib.open', 'nntplib.connect', 'telnetlib.Telnet.open')
 
     def deny(msg):
-        raise PermissionError('NoteTOO: ' + msg)
+        # No exception: its traceback would hand the script this frame. The script ends here.
+        state['busy'] = True
+        try:
+            os.write(2, ('\nNoteTOO guard stopped the script: ' + msg + '\n').encode('utf-8', 'replace'))
+            report()
+        finally:
+            os._exit(126)
 
     def hook(event, args):
         if state['busy']:
@@ -134,31 +140,31 @@ def _install():
             w = any(c in mode for c in 'wax+') or bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC))
             if w:
                 if not writable(p):
-                    deny('scripts may only write inside the school folder: %s' % target)
+                    deny('scripts may only write inside the school folder: %s' % p)
                 changing(p, original(target))
             elif not readable(p):
-                deny('reading %s is blocked (outside the school folder)' % target)
+                deny('reading %s is blocked (outside the school folder)' % p)
         elif event in ('os.remove', 'os.unlink', 'os.rmdir', 'shutil.rmtree'):
             p = real(args[0])
             if p is not None and not (scratch(p) or p in created):
-                deny('scripts cannot delete files; ask NoteTOO to delete them (it asks you first): %s' % args[0])
+                deny('scripts cannot delete files; ask NoteTOO to delete them (it asks you first): %s' % p)
         elif event in ('os.rename', 'os.replace'):
             src, dst = real(args[0]), real(args[1])
             if src is None or dst is None:
                 return
             if not writable(dst):
-                deny('scripts may only write inside the school folder: %s' % args[1])
+                deny('scripts may only write inside the school folder: %s' % dst)
             if not (scratch(src) or src in created):
-                deny('scripts cannot move or rename existing files; ask NoteTOO to move them (annotations move with them): %s' % args[0])
+                deny('scripts cannot move or rename existing files; ask NoteTOO to move them (annotations move with them): %s' % src)
             changing(dst, original(args[1]))
         elif event in ('os.mkdir', 'os.chmod', 'os.chown', 'os.truncate', 'os.utime'):
             p = real(args[0])
             if p is not None and not writable(p):
-                deny('scripts may only change things inside the school folder: %s' % args[0])
+                deny('scripts may only change things inside the school folder: %s' % p)
             if event == 'os.truncate' and p is not None:
                 changing(p, original(args[0]))
         elif event.startswith(BLOCKED_EXEC):
-            deny('this is blocked in scripts (%s)' % event)
+            deny('this is blocked in scripts (%s)' % str.__str__(event))
         elif event.startswith('winreg.'):
             deny('the Windows registry is off limits to scripts')
         elif not NET and event.startswith(NET_EVENTS):

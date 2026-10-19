@@ -43,8 +43,18 @@ describe.skipIf(!hasPython)('python guard', () => {
     ['native code', "import ctypes; ctypes.CDLL(None)", /ctypes.dlopen/],
   ])('blocks %s', async (_name, code, err) => {
     const r = await run(code);
-    expect(r.exitCode).not.toBe(0);
+    expect(r.exitCode).toBe(126);
+    expect(lastLine(r.stderr)).toMatch(/^NoteTOO guard stopped the script: /);
     expect(lastLine(r.stderr)).toMatch(err);
+  });
+
+  it('a blocked action ends the script: it cannot catch the error and carry on', async () => {
+    const r = await run(
+      `try:\n    open(${JSON.stringify(path.join(outside, 'first'))}, 'w')\nexcept BaseException as e:\n    print('caught', e.__traceback__)\nopen('Maths/after.txt', 'w').write('x')`,
+    );
+    expect(r.exitCode).toBe(126);
+    expect(r.stdout).toBe('');
+    expect(existsSync(path.join(root, 'Maths/after.txt'))).toBe(false);
   });
 
   it.each([
@@ -76,8 +86,8 @@ open(S(${JSON.stringify(path.join(outside, 'z'))}), 'w')`,
     ],
   ])('cannot switch the guard off with %s', async (_name, code) => {
     const r = await run(`${code}\nopen(${JSON.stringify(path.join(outside, 'escaped'))}, 'w').write('x')`);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toMatch(/PermissionError: NoteTOO/);
+    expect(r.exitCode).toBe(126);
+    expect(r.stderr).toMatch(/NoteTOO guard stopped the script/);
     expect(existsSync(path.join(outside, 'escaped'))).toBe(false);
     expect(existsSync(path.join(outside, 'y'))).toBe(false);
     expect(existsSync(path.join(outside, 'z'))).toBe(false);

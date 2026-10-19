@@ -448,22 +448,20 @@ sent to that provider.
 - **Inside your shared folders only**, through the same trust boundary as the rest of the server; never `.noteTOO`,
   hidden folders, or links that lead outside.
 - **The server decides what needs you, not the model:** deleting (always; to the Recycle Bin), moving more than 10 items
-  or a whole subject, running a script (by default; see below) and any internet access show **Allow / Don't allow** in
+  or a whole subject, running a script and any internet access show **Allow / Don't allow** in
   the panel with exactly what will happen (the script's code, the paths).
 - **Documents are data, never instructions.** The model is told so, and even if a document tricks it, destructive
   actions still need your approval.
 - **Every change is journaled**, with the previous version of each changed file kept in
   `%APPDATA%\NoteTOO\agent-backups\`. **Undo these changes** reverts a whole task (created files go to the Recycle Bin).
   Every task is logged in `%APPDATA%\NoteTOO\agent-log.jsonl` (request, tools used, files changed).
-- **Python scripts** (AI settings → Agent: *Ask me before each script* (default), *Run them without asking (guarded, not a
-  full sandbox)*, or *Never*)
-  run with your school folder as working directory, a time limit (60 s by default, the whole process tree is stopped),
-  capped output, and a guard (Python audit hooks) that blocks writing outside the school folder, reading your other
-  personal files, deleting, starting programs, native code and network access unless you approved it; files a script
-  changes are backed up first. The guard's state is out of the script's reach (it cannot be switched off from Python
-  code), and it prevents mistakes and tricks from documents; but it is not an operating-system sandbox, and code written
-  to defeat it (e.g. through a compiled extension) could, so scripts run with your account's rights. That is why scripts
-  are shown to you by default. Install the libraries you want scripts
+- **Python scripts** always show you their code and run only if you click **Allow** (or never: AI settings → Agent →
+  *Never run scripts*). They run with your school folder as working directory, a time limit (60 s by default, the whole
+  process tree is stopped), capped output, and a guard (Python audit hooks) that stops a script as soon as it writes
+  outside the school folder, reads your other personal files, deletes, starts programs, loads native code or uses the
+  network without your approval; files a script changes are backed up first. The guard catches mistakes; it is **not a
+  sandbox** (code in the same process can get around any Python-level guard, and scripts run with your account's
+  rights), which is why there is no option to run scripts without seeing them. Install the libraries you want scripts
   to use (`py -m pip install pandas matplotlib python-docx openpyxl`).
 
 ### Limits

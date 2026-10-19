@@ -614,8 +614,10 @@ describe('agent: model compatibility and errors', () => {
     const call = async (ch: string, ...args: unknown[]) =>
       (await (await req(`/api/rpc/${ch}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify(args) })).json()).value;
     expect(await call('agent:get-settings')).toEqual({ scripts: 'ask', python: '', maxSteps: 0 });
-    expect(await call('agent:set-settings', { scripts: 'auto', maxSteps: 12, junk: 1 })).toEqual({ scripts: 'auto', python: '', maxSteps: 12 });
-    expect(store.get().agent).toEqual({ scripts: 'auto', python: '', maxSteps: 12 });
+    expect(await call('agent:set-settings', { scripts: 'off', maxSteps: 12, junk: 1 })).toEqual({ scripts: 'off', python: '', maxSteps: 12 });
+    expect(store.get().agent).toEqual({ scripts: 'off', python: '', maxSteps: 12 });
+    // Running scripts without asking is no longer possible: an old "auto" setting means "ask".
+    expect(await call('agent:set-settings', { scripts: 'auto' })).toEqual({ scripts: 'ask', python: '', maxSteps: 0 });
     const st = await call('agent:status', rootId);
     expect(st.index.files).toBeGreaterThan(5);
   });

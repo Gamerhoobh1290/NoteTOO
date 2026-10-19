@@ -122,7 +122,7 @@ export async function followRun(id: string, onEvent: (e: AgentEvent) => void, o:
 }
 
 export interface AgentSettings {
-  scripts: 'ask' | 'auto' | 'off';
+  scripts: 'ask' | 'off';
   python: string;
   maxSteps: number;
 }

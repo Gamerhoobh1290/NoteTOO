@@ -274,23 +274,15 @@ function AgentSection({ value, onChange }: { value: AgentSettings; onChange: (s:
       <h3>Agent</h3>
       <p className="muted hint">
         The agent works on your PC with your whole school folder: it finds and reads files, creates and changes documents. Deleting files, big
-        reorganizations and internet access always ask you first; every change can be undone.
+        reorganizations, scripts and internet access always ask you first; every change can be undone.
       </p>
       <label className="field">
         <span>Python scripts written by the agent</span>
         <select value={value.scripts} onChange={(e) => onChange({ ...value, scripts: e.target.value as AgentSettings['scripts'] })}>
           <option value="ask">Ask me before each script (shows the code)</option>
-          <option value="auto">Run them without asking (guarded, not a full sandbox)</option>
           <option value="off">Never run scripts</option>
         </select>
       </label>
-      {value.scripts === 'auto' && (
-        <p className="muted hint">
-          Scripts then run with your Windows account's rights. A guard stops them from writing outside the school folder, deleting, starting
-          programs or using the internet, and backs up what they change, but it is not a sandbox: code written to get around it could. Keep
-          “Ask me” if you use the agent on documents you didn’t write yourself.
-        </p>
-      )}
       <label className="field">
         <span>Python program (optional)</span>
         <input value={value.python} onChange={(e) => onChange({ ...value, python: e.target.value })} placeholder="Found automatically (py -3, python3, python)" spellCheck={false} />

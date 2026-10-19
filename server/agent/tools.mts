@@ -19,8 +19,9 @@ import { runPython } from './python.mjs';
 export type Risk = 'read' | 'write' | 'destructive' | 'script';
 
 export interface AgentSettings {
-  /** 'ask': every script is shown for approval; 'auto': run under the guard; 'off': no scripts */
-  scripts: 'ask' | 'auto' | 'off';
+  /** 'ask': every script is shown for approval; 'off': no scripts. (Scripts never run unseen: the
+   *  Python guard is not a security boundary.) */
+  scripts: 'ask' | 'off';
   /** a specific python.exe (else py -3 / python3 / python) */
   python: string;
   maxSteps: number;
@@ -31,7 +32,8 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = { scripts: 'ask', python: '
 export function parseAgentSettings(raw: unknown): AgentSettings {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<AgentSettings>;
   return {
-    scripts: r.scripts === 'auto' || r.scripts === 'off' ? r.scripts : 'ask',
+    // 'auto' (run without asking) existed before; it is no longer offered.
+    scripts: r.scripts === 'off' ? 'off' : 'ask',
     python: typeof r.python === 'string' ? r.python.trim() : '',
     maxSteps: Number.isInteger(r.maxSteps) && r.maxSteps! >= 0 && r.maxSteps! <= 100 ? r.maxSteps! : 0,
   };
@@ -931,7 +933,7 @@ def({
   spec: {
     name: 'run_python',
     description:
-      'Runs a Python 3 script on the PC for what other tools cannot do: calculations, statistics, charts (matplotlib → .png), data processing (pandas), converting files, batch edits. The working directory is the school folder (use relative paths). It may write inside the school folder only (changed files are backed up); it cannot delete, start programs or use the network unless allow_network is true (the user is asked). Print results to stdout.',
+      'Runs a Python 3 script on the PC for what other tools cannot do: calculations, statistics, charts (matplotlib → .png), data processing (pandas), converting files, batch edits. The user sees the code and must allow it. The working directory is the school folder (use relative paths). It may write inside the school folder only (changed files are backed up); deleting, starting programs or using the network (unless allow_network) stops the script. Print results to stdout.',
     parameters: {
       type: 'object',
       properties: {
@@ -948,11 +950,11 @@ def({
     if (ctx.settings.scripts === 'off') throw new ToolError('Scripts are turned off in the agent settings. Do the task with the other tools, or tell the user.');
     const code = str(a, 'code');
     const net = bool(a, 'allow_network');
-    if (ctx.settings.scripts === 'ask' || net) {
+    {
       const ok = await ctx.approve({
         tool: 'run_python',
         title: net ? 'Run a script WITH internet access?' : 'Run a Python script on your PC?',
-        detail: `${(str(a, 'purpose', false) || 'No purpose given').replace(/[.!?\s]*$/, '.')} It can read and write in your school folder only${net ? ' and use the internet' : ''}; files it changes are backed up.`,
+        detail: `${(str(a, 'purpose', false) || 'No purpose given').replace(/[.!?\s]*$/, '.')} Read the code: it runs with your account's rights. NoteTOO's guard stops it if it writes outside your school folder, deletes, starts programs${net ? '' : ' or uses the internet'}, and backs up files it changes, but the guard is a safety net, not a sandbox.`,
         code,
       });
       if (!ok) return { ok: false, content: 'The user declined to run this script. Do it another way, or explain what is needed.', summary: 'declined by you' };
@@ -976,14 +978,25 @@ def({
     const err = clip(r.stderr.trim(), Math.floor(ctx.budget * 0.3));
     const ok = r.exitCode === 0 && !r.timedOut;
     const content = [
-      r.timedOut ? `The script was stopped after ${timeout} s (time limit).` : `Exit code ${r.exitCode} (${(r.ms / 1000).toFixed(1)} s).`,
+      r.timedOut
+        ? `The script was stopped after ${timeout} s (time limit).`
+        : r.exitCode === 126 && /NoteTOO guard stopped the script/.test(r.stderr)
+          ? 'The guard stopped the script because it tried something scripts may not do (see stderr). Change the script, or use the dedicated tools (delete, move…).'
+          : `Exit code ${r.exitCode} (${(r.ms / 1000).toFixed(1)} s).`,
       out ? `stdout:\n${out}` : 'stdout: (empty)',
       err ? `stderr:\n${err}` : '',
       written.length ? `Files written in the school folder: ${written.join(', ')}` : 'No file of the school folder was written.',
     ]
       .filter(Boolean)
       .join('\n');
-    return { ok, content, summary: ok ? `done in ${(r.ms / 1000).toFixed(1)} s${written.length ? `, ${written.length} file(s) written` : ''}` : r.timedOut ? 'stopped: time limit' : `failed (exit ${r.exitCode})` };
+    const summary = ok
+      ? `done in ${(r.ms / 1000).toFixed(1)} s${written.length ? `, ${written.length} file(s) written` : ''}`
+      : r.timedOut
+        ? 'stopped: time limit'
+        : r.exitCode === 126
+          ? 'stopped by the guard'
+          : `failed (exit ${r.exitCode})`;
+    return { ok, content, summary };
   },
 });
 
