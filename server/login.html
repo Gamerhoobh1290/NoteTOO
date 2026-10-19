@@ -46,10 +46,11 @@ const form = document.getElementById('form');
 const err = document.getElementById('error');
 const go = document.getElementById('go');
 // Only a path on this server, never another site.
-let next = '/';
+let next = location.origin + '/';
 try {
   const u = new URL(new URLSearchParams(location.search).get('next') || '/', location.origin);
-  if (u.origin === location.origin) next = u.pathname + u.search + u.hash;
+  // The full URL: a path like "//other.site" (from "/.//other.site") is never re-read as another site.
+  if (u.origin === location.origin) next = u.href;
 } catch {}
 form.addEventListener('submit', async (e) => {
   e.preventDefault();

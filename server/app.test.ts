@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { createNoteTooServer, isPrivateAddress, sessionCookie, sessionExpiry } = await import('./app.mts');
+const { createNoteTooServer, isLinkLocal, isPrivateAddress, sessionCookie, sessionExpiry } = await import('./app.mts');
 const { ConfigStore } = await import('./config.mts');
 const disk = await import('../electron/disk.mts');
 
@@ -108,6 +108,23 @@ describe('sign-in', () => {
     expect(locked.status).toBe(429);
   });
 
+  it('behind a proxy on this PC, uses the address the proxy added, not one the browser made up', async () => {
+    for (let i = 0; i < 10; i++) {
+      const res = await req('/api/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': `10.9.9.${i}, 100.64.0.7` },
+        body: '{"key":"nope"}',
+      });
+      expect(res.status).toBe(401);
+    }
+    const locked = await req('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': '10.9.9.99, 100.64.0.7' },
+      body: JSON.stringify({ key: store.get().key }),
+    });
+    expect(locked.status).toBe(429);
+  });
+
   it('refuses forged or expired cookies, and a new key signs everyone out', async () => {
     const { secret } = store.get();
     const good = sessionCookie(secret, 1000);
@@ -162,6 +179,9 @@ describe('trust boundary', () => {
       expect(isPrivateAddress(a), a).toBe(true);
     }
     for (const a of ['8.8.8.8', '100.128.0.1', '172.32.0.1', '2001:db8::1', '', undefined]) expect(isPrivateAddress(a), String(a)).toBe(false);
+    // AI requests never go to link-local addresses, also when a host name resolves to one.
+    for (const a of ['169.254.169.254', '::ffff:169.254.169.254', '[::ffff:a9fe:a9fe]', 'fe80::1', '[fe80::1]']) expect(isLinkLocal(a), a).toBe(true);
+    for (const a of ['127.0.0.1', '192.168.1.5', '::1', 'fd7a:115c:a1e0::1']) expect(isLinkLocal(a), a).toBe(false);
   });
 });
 
@@ -264,7 +284,7 @@ describe('AI proxy', () => {
 
       const notAi = await req('/api/ai/admin', { method: 'POST', headers: { 'x-notetoo-ai-base': upstream.url } });
       expect(notAi.status).toBe(400);
-      for (const bad of ['file:///C:/x', 'http://user:pw@127.0.0.1:9', 'http://127.0.0.1:9/?x=1', 'http://169.254.169.254', 'not a url']) {
+      for (const bad of ['file:///C:/x', 'http://user:pw@127.0.0.1:9', 'http://127.0.0.1:9/?x=1', 'http://169.254.169.254', 'http://[::ffff:169.254.169.254]', 'http://2852039166', 'not a url']) {
         expect((await req('/api/ai/api/tags', { headers: { 'x-notetoo-ai-base': bad } })).status, bad).toBe(400);
       }
     } finally {
