@@ -69,7 +69,7 @@ export class ConfigStore {
 
   constructor(readonly dataDir: string) {
     this.file = path.join(dataDir, 'server.json');
-    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     // First start: share the folders the desktop app already knows. Written back either way, so a
     // key added by parse() (first start, or removed by hand) is kept.
     this.value = this.readFile() ?? parse({ folders: desktopFolders(dataDir) });
@@ -88,7 +88,8 @@ export class ConfigStore {
   }
 
   private write(v: ServerConfig) {
-    writeFileSync(this.file + '.tmp', JSON.stringify(v, null, 2));
+    // Owner-only where the OS supports modes (on Windows, %APPDATA% is already private to the user).
+    writeFileSync(this.file + '.tmp', JSON.stringify(v, null, 2), { mode: 0o600 });
     renameSync(this.file + '.tmp', this.file);
     this.mtime = statSync(this.file).mtimeMs;
   }
