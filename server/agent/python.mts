@@ -1,10 +1,11 @@
 // Python scripts the agent writes, run on the PC under guard: for work the built-in tools can't do
 // (calculations, data processing, charts, converting files with libraries the user has installed).
 //
-// The guard is a Python audit hook (PEP 578) installed before the script runs. It is a safety net
-// against mistakes and against instructions smuggled into documents, not a sandbox against
-// hostile code (a determined script can get around audit hooks, which is why scripts are shown to
-// the user for approval unless they chose otherwise). It:
+// The guard is a Python audit hook (PEP 578) installed before the script runs, its state kept in a
+// closure the script cannot reach (fresh __main__, no gc introspection). It is a safety net against
+// mistakes and against instructions smuggled into documents, NOT an OS sandbox: hostile code can get
+// around audit hooks (for example through a C extension), which is why scripts are shown to the
+// user for approval unless they chose otherwise. It:
 //  - allows writing only inside the school folder (never in .noteTOO) and the run's work folder,
 //    and copies every existing file to the backup folder before it is first changed;
 //  - blocks reading inside the user's home folder (keys, browser profiles…) except the school
@@ -19,155 +20,187 @@ import { existsSync, mkdirSync, promises as fsp } from 'node:fs';
 import * as path from 'node:path';
 
 export const GUARD = String.raw`
-import os, sys, shutil, json, atexit, tempfile
+def _install():
+    # Everything the guard needs lives in this function's closure: the script cannot reach it
+    # through __main__, its globals or a frame (the hook is never on the script's stack), and the
+    # gc introspection that could find it is blocked below.
+    import os, sys, shutil, json, atexit, tempfile, pathlib
 
-ROOT = os.path.realpath(os.environ['NOTETOO_ROOT'])
-WORK = os.path.realpath(os.environ['NOTETOO_WORK'])
-BACKUP = os.environ['NOTETOO_BACKUP']
-NET = os.environ.get('NOTETOO_ALLOW_NET') == '1'
-HOME = os.path.realpath(os.path.expanduser('~'))
-TMP = os.path.realpath(tempfile.gettempdir())
-META = os.path.join(ROOT, '.noteTOO')
-
-def norm(p):
-    return os.path.normcase(os.path.realpath(p))
-
-PY = set()
-for p in [sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix] + [x for x in sys.path if x]:
+    ROOT = os.path.realpath(os.environ['NOTETOO_ROOT'])
+    WORK = os.path.realpath(os.environ['NOTETOO_WORK'])
+    BACKUP = os.environ.pop('NOTETOO_BACKUP')
+    NET = os.environ.get('NOTETOO_ALLOW_NET') == '1'
+    norm = lambda p: os.path.normcase(os.path.realpath(p))
+    N_ROOT, N_WORK = norm(ROOT), norm(WORK)
+    N_TMP = norm(tempfile.gettempdir())
+    N_HOME = norm(os.path.expanduser('~'))
+    N_META = norm(os.path.join(ROOT, '.noteTOO'))
+    py_dirs = set()
+    for p in [sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix] + [x for x in sys.path if x]:
+        try:
+            if os.path.isdir(p):
+                py_dirs.add(norm(p))
+        except Exception:
+            pass
     try:
-        if os.path.isdir(p): PY.add(norm(p))
+        import site
+        for p in site.getsitepackages() + [site.getusersitepackages()]:
+            py_dirs.add(norm(p))
     except Exception:
         pass
-try:
-    import site
-    for p in site.getsitepackages() + [site.getusersitepackages()]:
-        PY.add(norm(p))
-except Exception:
-    pass
+    PY = frozenset(py_dirs)
 
-N_ROOT, N_WORK, N_TMP, N_HOME, N_META = norm(ROOT), norm(WORK), norm(TMP), norm(HOME), norm(META)
+    def inside(p, d):
+        return p == d or p.startswith(d.rstrip(os.sep) + os.sep)
 
-def inside(p, d):
-    return p == d or p.startswith(d.rstrip(os.sep) + os.sep)
+    def scratch(p):
+        # the run's own folder (temporary files go there too: TEMP/TMP point into it)
+        return inside(p, N_WORK) or (inside(p, N_TMP) and not inside(p, N_ROOT))
 
-def scratch(p):
-    # the run's own folder (temporary files go there too: TEMP/TMP point into it)
-    return inside(p, N_WORK) or (inside(p, N_TMP) and not inside(p, N_ROOT))
+    def writable(p):
+        return (inside(p, N_ROOT) and not inside(p, N_META)) or scratch(p)
 
-def writable(p):
-    return (inside(p, N_ROOT) and not inside(p, N_META)) or scratch(p)
+    def readable(p):
+        if writable(p) or inside(p, N_ROOT) or any(inside(p, d) for d in PY):
+            return True
+        return not inside(p, N_HOME)
 
-def readable(p):
-    if writable(p) or inside(p, N_ROOT) or any(inside(p, d) for d in PY):
-        return True
-    return not inside(p, N_HOME)
+    state = {'busy': False}
+    written, backed, created = set(), set(), set()
 
-busy = [False]
-written, backed, created = set(), set(), set()
+    # The hook must never run the script's own code (a custom path object or a str subclass could
+    # read the hook's frame): only plain values, and pathlib/DirEntry paths, are accepted.
+    mro_of = type.__dict__['__mro__'].__get__
+    dict_of = type.__dict__['__dict__'].__get__
+    TRUSTED_FSPATH = (pathlib.PurePath.__dict__['__fspath__'], os.DirEntry.__dict__['__fspath__'])
 
-def real(p):
-    if p is None or isinstance(p, int):
-        return None
-    if isinstance(p, bytes):
-        p = os.fsdecode(p)
-    return norm(os.path.abspath(os.fspath(p)))
+    def plain(p):
+        if isinstance(p, str):
+            return str.__str__(p)
+        if isinstance(p, bytes):
+            return os.fsdecode(bytes.__getitem__(p, slice(None)))
+        for k in mro_of(type(p)):
+            f = dict_of(k).get('__fspath__')
+            if f is not None:
+                if f in TRUSTED_FSPATH:
+                    return plain(f(p))
+                break
+        deny('unsupported path object (use a string or pathlib.Path)')
 
-def backup(p, original):
-    if p in backed or not inside(p, N_ROOT) or not os.path.isfile(original):
-        return
-    backed.add(p)
-    dst = os.path.join(BACKUP, os.path.relpath(original, ROOT))
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.copy2(original, dst)
+    def real(p):
+        if p is None or isinstance(p, int):
+            return None
+        return norm(os.path.abspath(plain(p)))
 
-def changing(p, original):
-    busy[0] = True
-    try:
-        if not os.path.exists(original):
-            created.add(p)
-        backup(p, original)
-    finally:
-        busy[0] = False
-    if inside(p, N_ROOT):
-        written.add(os.path.relpath(original, ROOT).replace(os.sep, '/'))
+    def original(p):
+        return os.path.abspath(plain(p))
 
-BLOCKED_EXEC = ('subprocess.Popen', 'os.system', 'os.exec', 'os.spawn', 'os.posix_spawn', 'os.startfile', 'os.fork',
-                'os.forkpty', 'pty.spawn', 'os.kill', 'os.killpg', 'ctypes.dlopen', 'ctypes.dlsym', 'ctypes.call_function',
-                'webbrowser.open', 'os.symlink', 'os.link')
-NET_EVENTS = ('socket.connect', 'socket.sendto', 'socket.sendmsg', 'socket.bind', 'socket.getaddrinfo',
-              'socket.gethostbyname', 'socket.gethostbyaddr', 'urllib.Request', 'http.client.connect', 'ftplib.connect',
-              'smtplib.connect', 'poplib.connect', 'imaplib.open', 'nntplib.connect', 'telnetlib.Telnet.open')
+    def changing(p, orig):
+        state['busy'] = True
+        try:
+            if not os.path.exists(orig):
+                created.add(p)
+            if p not in backed and inside(p, N_ROOT) and os.path.isfile(orig):
+                backed.add(p)
+                dst = os.path.join(BACKUP, os.path.relpath(orig, ROOT))
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(orig, dst)
+        finally:
+            state['busy'] = False
+        if inside(p, N_ROOT):
+            written.add(os.path.relpath(orig, ROOT).replace(os.sep, '/'))
 
-def deny(msg):
-    raise PermissionError('NoteTOO: ' + msg)
+    BLOCKED_EXEC = ('subprocess.Popen', 'os.system', 'os.exec', 'os.spawn', 'os.posix_spawn', 'os.startfile', 'os.fork',
+                    'os.forkpty', 'pty.spawn', 'os.kill', 'os.killpg', 'ctypes.dlopen', 'ctypes.dlsym', 'ctypes.call_function',
+                    'webbrowser.open', 'os.symlink', 'os.link', 'gc.get_objects', 'gc.get_referrers', 'gc.get_referents',
+                    'sys.setprofile', 'sys.settrace')
+    NET_EVENTS = ('socket.connect', 'socket.sendto', 'socket.sendmsg', 'socket.bind', 'socket.getaddrinfo',
+                  'socket.gethostbyname', 'socket.gethostbyaddr', 'urllib.Request', 'http.client.connect', 'ftplib.connect',
+                  'smtplib.connect', 'poplib.connect', 'imaplib.open', 'nntplib.connect', 'telnetlib.Telnet.open')
 
-def hook(event, args):
-    if busy[0]:
-        return
-    if event == 'open':
-        target, mode, flags = args
-        p = real(target)
-        if p is None:
+    def deny(msg):
+        raise PermissionError('NoteTOO: ' + msg)
+
+    def hook(event, args):
+        if state['busy']:
             return
-        w = (isinstance(mode, str) and any(c in mode for c in 'wax+')) or (
-            isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC))
-        if w:
-            if not writable(p):
-                deny('scripts may only write inside the school folder: %s' % target)
-            changing(p, os.path.abspath(os.fspath(target) if not isinstance(target, bytes) else os.fsdecode(target)))
-        elif not readable(p):
-            deny('reading %s is blocked (outside the school folder)' % target)
-    elif event in ('os.remove', 'os.unlink', 'os.rmdir', 'shutil.rmtree'):
-        p = real(args[0])
-        if p is not None and not (scratch(p) or p in created):
-            deny('scripts cannot delete files; ask NoteTOO to delete them (it asks you first): %s' % args[0])
-    elif event in ('os.rename', 'os.replace'):
-        src, dst = real(args[0]), real(args[1])
-        if src is None or dst is None:
-            return
-        if not writable(dst):
-            deny('scripts may only write inside the school folder: %s' % args[1])
-        if not (scratch(src) or src in created):
-            deny('scripts cannot move or rename existing files; ask NoteTOO to move them (annotations move with them): %s' % args[0])
-        changing(dst, os.path.abspath(os.fsdecode(args[1]) if isinstance(args[1], bytes) else os.fspath(args[1])))
-    elif event in ('os.mkdir', 'os.chmod', 'os.chown', 'os.truncate', 'os.utime'):
-        p = real(args[0])
-        if p is not None and not writable(p):
-            deny('scripts may only change things inside the school folder: %s' % args[0])
-        if event == 'os.truncate' and p is not None:
-            changing(p, os.path.abspath(os.fspath(args[0])))
-    elif event.startswith(BLOCKED_EXEC):
-        deny('starting programs and loading native code are blocked in scripts (%s)' % event)
-    elif event.startswith('winreg.'):
-        deny('the Windows registry is off limits to scripts')
-    elif not NET and event.startswith(NET_EVENTS):
-        deny('network access is blocked; ask again with network access if the task really needs it')
+        if event == 'open':
+            target, mode, flags = args
+            p = real(target)
+            if p is None:
+                return
+            mode = str.__str__(mode) if isinstance(mode, str) else ''
+            flags = int.__int__(flags) if isinstance(flags, int) else 0
+            w = any(c in mode for c in 'wax+') or bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC))
+            if w:
+                if not writable(p):
+                    deny('scripts may only write inside the school folder: %s' % target)
+                changing(p, original(target))
+            elif not readable(p):
+                deny('reading %s is blocked (outside the school folder)' % target)
+        elif event in ('os.remove', 'os.unlink', 'os.rmdir', 'shutil.rmtree'):
+            p = real(args[0])
+            if p is not None and not (scratch(p) or p in created):
+                deny('scripts cannot delete files; ask NoteTOO to delete them (it asks you first): %s' % args[0])
+        elif event in ('os.rename', 'os.replace'):
+            src, dst = real(args[0]), real(args[1])
+            if src is None or dst is None:
+                return
+            if not writable(dst):
+                deny('scripts may only write inside the school folder: %s' % args[1])
+            if not (scratch(src) or src in created):
+                deny('scripts cannot move or rename existing files; ask NoteTOO to move them (annotations move with them): %s' % args[0])
+            changing(dst, original(args[1]))
+        elif event in ('os.mkdir', 'os.chmod', 'os.chown', 'os.truncate', 'os.utime'):
+            p = real(args[0])
+            if p is not None and not writable(p):
+                deny('scripts may only change things inside the school folder: %s' % args[0])
+            if event == 'os.truncate' and p is not None:
+                changing(p, original(args[0]))
+        elif event.startswith(BLOCKED_EXEC):
+            deny('this is blocked in scripts (%s)' % event)
+        elif event.startswith('winreg.'):
+            deny('the Windows registry is off limits to scripts')
+        elif not NET and event.startswith(NET_EVENTS):
+            deny('network access is blocked; ask again with network access if the task really needs it')
 
-def report():
-    busy[0] = True
-    try:
-        with open(os.path.join(WORK, '_written.json'), 'w', encoding='utf-8') as f:
-            json.dump(sorted(written), f)
-    except Exception:
-        pass
+    def report():
+        state['busy'] = True
+        try:
+            with open(os.path.join(WORK, '_written.json'), 'w', encoding='utf-8') as f:
+                json.dump(sorted(written), f)
+        except Exception:
+            pass
 
-atexit.register(report)
+    atexit.register(report)
+    if os.name == 'posix':
+        try:
+            import resource
+            limit = int(os.environ.get('NOTETOO_MEMORY_MB', '2048')) * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+        except Exception:
+            pass
+    sys.addaudithook(hook)
 
-if os.name == 'posix':
-    try:
-        import resource
-        limit = int(os.environ.get('NOTETOO_MEMORY_MB', '2048')) * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
-    except Exception:
-        pass
 
-script = sys.argv[1]
-with open(script, encoding='utf-8') as f:
-    code = compile(f.read(), 'script.py', 'exec')
-sys.argv = ['script.py']
-sys.addaudithook(hook)
-del os.environ['NOTETOO_BACKUP']
-exec(code, {'__name__': '__main__', '__file__': os.path.join(WORK, 'script.py'), '__builtins__': __builtins__})
+def _run(script):
+    import sys, types
+    with open(script, encoding='utf-8') as f:
+        code = compile(f.read(), 'script.py', 'exec')
+    _install()
+    # The script gets a fresh __main__: nothing of the guard is reachable from it.
+    main = types.ModuleType('__main__')
+    main.__file__ = script
+    main.__builtins__ = __builtins__
+    sys.modules['__main__'] = main
+    sys.argv = ['script.py']
+    exec(code, main.__dict__)
+
+
+_script = __import__('sys').argv[1]
+for _k in [k for k in globals() if k not in ('_run', '_install', '_script', '__builtins__', '__name__')]:
+    del globals()[_k]
+_run(_script)
 `;
 
 export interface PythonResult {

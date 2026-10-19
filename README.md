@@ -455,12 +455,15 @@ sent to that provider.
 - **Every change is journaled**, with the previous version of each changed file kept in
   `%APPDATA%\NoteTOO\agent-backups\`. **Undo these changes** reverts a whole task (created files go to the Recycle Bin).
   Every task is logged in `%APPDATA%\NoteTOO\agent-log.jsonl` (request, tools used, files changed).
-- **Python scripts** (AI settings → Agent: *Ask me before each script* (default), *Run them without asking*, or *Never*)
+- **Python scripts** (AI settings → Agent: *Ask me before each script* (default), *Run them without asking (guarded, not a
+  full sandbox)*, or *Never*)
   run with your school folder as working directory, a time limit (60 s by default, the whole process tree is stopped),
   capped output, and a guard (Python audit hooks) that blocks writing outside the school folder, reading your other
   personal files, deleting, starting programs, native code and network access unless you approved it; files a script
-  changes are backed up first. The guard prevents mistakes and tricks from documents; it is not a sandbox against
-  deliberately hostile code, which is why scripts are shown to you by default. Install the libraries you want scripts
+  changes are backed up first. The guard's state is out of the script's reach (it cannot be switched off from Python
+  code), and it prevents mistakes and tricks from documents; but it is not an operating-system sandbox, and code written
+  to defeat it (e.g. through a compiled extension) could, so scripts run with your account's rights. That is why scripts
+  are shown to you by default. Install the libraries you want scripts
   to use (`py -m pip install pandas matplotlib python-docx openpyxl`).
 
 ### Limits
