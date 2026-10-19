@@ -464,6 +464,11 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
         }
       };
       const unsubscribe = r.subscribe(after, write);
+      // Already over (and its end already seen): nothing more will come.
+      if (r.finishedAt && !ended) {
+        unsubscribe();
+        return void res.end();
+      }
       const ping = setInterval(() => res.write(': ping\n\n'), 15_000);
       res.on('close', () => {
         clearInterval(ping);

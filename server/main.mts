@@ -127,6 +127,10 @@ server.listen(port, host, () => {
   }
   console.log('');
   printSetup();
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < 22 || (major === 22 && minor < 13)) {
+    console.log(`\nNote: Node.js ${process.versions.node} is too old for the AI agent to read PDFs. Install Node.js 22 LTS or later from nodejs.org.`);
+  }
 });
 
 let stopping = false;

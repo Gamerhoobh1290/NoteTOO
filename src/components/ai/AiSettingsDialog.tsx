@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, CircleAlert, RefreshCw, ShieldAlert } from 'lucide-react';
+import { getAgentSettings, getAgentStatus, setAgentSettings, type AgentSettings, type AgentStatus } from '../../ai/agentClient';
 import { chat, listModels, type ModelInfo } from '../../ai/client';
 import { PRESETS, defaultSettings, getAiSettings, isRemote, presetOf, saveAiSettings, type AiSettings, type PresetId } from '../../ai/settings';
 import { errorMessage, toast } from '../../lib/ui';
 import { useAi } from '../../state/AiContext';
+import { useApp } from '../../state/AppContext';
 import { cls } from '../common';
 import { desktop } from '../../desktop/bridge';
 
@@ -40,7 +42,11 @@ function SettingsForm({ close }: { close: () => void }) {
   const [loadingModels, setLoadingModels] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; text: string } | 'running' | null>(null);
   const [reload, setReload] = useState(0);
+  const [agent, setAgent] = useState<AgentSettings | null>(null);
   const preset = presetOf(s);
+  useEffect(() => {
+    if (onServer) getAgentSettings().then(setAgent, () => {});
+  }, []);
   const set = (p: Partial<AiSettings>) => {
     setS((x) => ({ ...x, ...p }));
     setTest(null);
@@ -105,6 +111,7 @@ function SettingsForm({ close }: { close: () => void }) {
   const save = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ready) return;
+    if (agent) setAgentSettings(agent).catch((err) => toast(`The agent settings could not be saved: ${errorMessage(err)}`, 'error'));
     void saveAiSettings(s).then((ok) => {
       if (!ok) {
         toast(
@@ -214,6 +221,8 @@ function SettingsForm({ close }: { close: () => void }) {
         {s.provider === 'ollama' ? '16384 suits a 12 GB GPU; lower it on smaller PCs.' : 'Use the model’s context length or less.'}
       </p>
 
+      {onServer && agent && <AgentSection value={agent} onChange={setAgent} />}
+
       {test && (
         <div className={cls('ai-test', test !== 'running' && (test.ok ? 'ok' : 'bad'))} role="status">
           {test === 'running' ? (
@@ -239,5 +248,59 @@ function SettingsForm({ close }: { close: () => void }) {
         </button>
       </div>
     </form>
+  );
+}
+
+/** The agent (on the PC): what scripts may do, which Python, how many steps; and what it found. */
+function AgentSection({ value, onChange }: { value: AgentSettings; onChange: (s: AgentSettings) => void }) {
+  const app = useApp();
+  const root = app.fs?.desktop?.rootId;
+  const [status, setStatus] = useState<AgentStatus | null>(null);
+  useEffect(() => {
+    if (!root) return;
+    let alive = true;
+    const load = () => getAgentStatus(root).then((st) => alive && setStatus(st), () => {});
+    void load();
+    const t = setInterval(load, 3000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [root]);
+  const [major, minor] = (status?.node ?? '99.0').split('.').map(Number);
+  const oldNode = major < 22 || (major === 22 && minor < 13);
+  return (
+    <div className="agent-settings">
+      <h3>Agent</h3>
+      <p className="muted hint">
+        The agent works on your PC with your whole school folder: it finds and reads files, creates and changes documents. Deleting files, big
+        reorganizations and internet access always ask you first; every change can be undone.
+      </p>
+      <label className="field">
+        <span>Python scripts written by the agent</span>
+        <select value={value.scripts} onChange={(e) => onChange({ ...value, scripts: e.target.value as AgentSettings['scripts'] })}>
+          <option value="ask">Ask me before each script (shows the code)</option>
+          <option value="auto">Run them without asking (inside the school folder only, no internet)</option>
+          <option value="off">Never run scripts</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>Python program (optional)</span>
+        <input value={value.python} onChange={(e) => onChange({ ...value, python: e.target.value })} placeholder="Found automatically (py -3, python3, python)" spellCheck={false} />
+      </label>
+      <label className="field">
+        <span>Maximum steps per task (0 = automatic: 20 for local models, 30 for online ones)</span>
+        <input type="number" min={0} max={100} value={value.maxSteps} onChange={(e) => onChange({ ...value, maxSteps: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })} />
+      </label>
+      {status && (
+        <p className="muted hint" role="status">
+          {status.python ? `Python ${status.python} found on the PC.` : 'Python was not found on the PC: scripts are unavailable (install it from python.org).'}{' '}
+          Search index: {status.index.indexed} of {status.index.indexed + status.index.pending} readable files
+          {status.index.reading ? ` (reading ${status.index.reading.done}/${status.index.reading.total}…)` : ''}
+          {status.index.unreadable ? `, ${status.index.unreadable} unreadable (scanned or old formats)` : ''}.
+          {oldNode && ` Node.js ${status.node} on the PC is too old to read PDFs: install Node.js 22 LTS or later.`}
+        </p>
+      )}
+    </div>
   );
 }

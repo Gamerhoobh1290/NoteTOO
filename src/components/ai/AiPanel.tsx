@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, BookOpenText, Copy, Highlighter, ListTree, NotebookPen, Settings, Sparkles, Square, Trash2, Wand2, X } from 'lucide-react';
+import {
+  ArrowUp, Ban, Bot, BookOpenText, Check, ChevronDown, ChevronRight, CircleDot, Copy, ExternalLink, Highlighter, ListTree, NotebookPen, Settings,
+  ShieldQuestion, Sparkles, Square, Trash2, Undo2, Wand2, WifiOff, X,
+} from 'lucide-react';
+import { agentAvailable } from '../../ai/agentClient';
+import { visibleChanges, type AgentView, type TimelineItem } from '../../ai/agentView';
 import { SHOW_TARGETS, parseShowLinks } from '../../ai/guide';
 import { PRESETS, isConfigured, presetOf, useAiSettings } from '../../ai/settings';
 import { SCRATCHPAD } from '../../fs/paths';
@@ -13,6 +18,12 @@ import { Spinner, cls } from '../common';
 import Markdown from '../Markdown';
 
 const EXAMPLES = ['How do I highlight part of a PDF?', 'How do I add files to a subject?', 'Where are my notes saved?'];
+const AGENT_EXAMPLES = [
+  'What subjects and files do I have?',
+  'Find where SWOT analysis is explained in my courses',
+  'Make a revision sheet (Word) from my latest course and my notes',
+  'Create a 10-question quiz from my last two lessons',
+];
 
 /** Opens the place a "Show me" button points to and outlines the control. */
 function useShowMe() {
@@ -88,6 +99,20 @@ export function AiPanel() {
           )}
           <Settings size={13} aria-hidden />
         </button>
+        {agentAvailable && (
+          <button
+            className={cls('chip agent-toggle', ai.agentMode && 'on')}
+            aria-pressed={ai.agentMode}
+            title={
+              ai.agentMode
+                ? 'Agent on: requests are done on your PC with your whole school folder (finds and reads files, creates and changes documents). Click to only chat about the open file.'
+                : 'Agent off: answers about the open file only. Click to let the AI work with your whole school folder.'
+            }
+            onClick={() => ai.setAgentMode(!ai.agentMode)}
+          >
+            <Bot size={13} aria-hidden /> Agent
+          </button>
+        )}
         <button className="icon-btn small" aria-label="Clear conversation" title="Clear conversation" onClick={ai.clear} disabled={!ai.messages.length}>
           <Trash2 size={14} />
         </button>
@@ -97,7 +122,21 @@ export function AiPanel() {
       </div>
 
       <div className="ai-context">
-        <span className="muted">About:</span> <strong title={place.path ?? place.label}>{place.label}</strong>
+        {ai.agentMode && agentAvailable ? (
+          <>
+            <span className="muted">Works with:</span> <strong>your whole school folder</strong>
+            {place.kind !== 'home' && (
+              <>
+                {' '}
+                <span className="muted">· open:</span> <span title={place.path ?? place.label}>{place.label}</span>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="muted">About:</span> <strong title={place.path ?? place.label}>{place.label}</strong>
+          </>
+        )}
       </div>
       <div className="ai-actions" data-tour="ai-actions">
         {place.kind === 'file' && place.path ? (
@@ -137,10 +176,12 @@ export function AiPanel() {
             ) : (
               <>
                 <p className="muted">
-                  Ask about the open file, or about how to use NoteTOO. Select text in a file to explain just that passage.
+                  {ai.agentMode && agentAvailable
+                    ? 'Ask for anything about your school files: the agent finds and reads them on your PC, creates or changes documents, and shows each step. No need to open the files first.'
+                    : 'Ask about the open file, or about how to use NoteTOO. Select text in a file to explain just that passage.'}
                 </p>
                 <div className="ai-examples">
-                  {EXAMPLES.map((q) => (
+                  {(ai.agentMode && agentAvailable ? AGENT_EXAMPLES : EXAMPLES).map((q) => (
                     <button key={q} className="chip" onClick={() => void ai.ask(q)}>
                       {q}
                     </button>
@@ -174,7 +215,13 @@ export function AiPanel() {
         <textarea
           ref={inputRef}
           rows={2}
-          placeholder={place.kind === 'file' ? `Ask about ${place.label}…` : 'Ask anything about NoteTOO…'}
+          placeholder={
+            ai.agentMode && agentAvailable
+              ? 'Ask the agent: find, summarize, create, organize…'
+              : place.kind === 'file'
+                ? `Ask about ${place.label}…`
+                : 'Ask anything about NoteTOO…'
+          }
           aria-label="Message to the AI"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -199,6 +246,7 @@ function Message({ m }: { m: AiMessage }) {
   const showMe = useShowMe();
 
   if (m.role === 'user') return <div className="ai-msg user">{m.text}</div>;
+  if (m.agent) return <AgentMessage m={m} />;
 
   const jump = (point: NonNullable<AiMessage['keyPoints']>['points'][number]) => {
     const path = m.keyPoints!.path;
@@ -254,28 +302,220 @@ function Message({ m }: { m: AiMessage }) {
         </p>
       )}
       {m.status === 'stopped' && <p className="muted hint">Stopped.</p>}
-      {m.status === 'done' && m.text && (
-        <div className="ai-msg-actions">
-          <button
-            className="link-btn"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(m.text);
-                toast('Copied.');
-              } catch {
-                toast('Could not copy to the clipboard.', 'error');
-              }
-            }}
-          >
-            <Copy size={13} /> Copy
-          </button>
-          {m.notesPath && (
-            <button className="link-btn" onClick={() => ai.saveToNotes(m)} title={`Append to ${m.notesPath}`}>
-              <NotebookPen size={13} /> Save to {m.notesPath === SCRATCHPAD ? 'scratchpad' : 'notes'}
+      {m.status === 'done' && m.text && <MessageActions m={m} />}
+    </div>
+  );
+}
+
+function MessageActions({ m }: { m: AiMessage }) {
+  const ai = useAi();
+  return (
+    <div className="ai-msg-actions">
+      <button
+        className="link-btn"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(m.text);
+            toast('Copied.');
+          } catch {
+            toast('Could not copy to the clipboard.', 'error');
+          }
+        }}
+      >
+        <Copy size={13} /> Copy
+      </button>
+      {m.notesPath && (
+        <button className="link-btn" onClick={() => ai.saveToNotes(m)} title={`Append to ${m.notesPath}`}>
+          <NotebookPen size={13} /> Save to {m.notesPath === SCRATCHPAD ? 'scratchpad' : 'notes'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+const ACTION_LABEL = { created: 'Created', modified: 'Changed', moved: 'Moved', deleted: 'Deleted', folder: 'New folder' } as const;
+
+function StepIcon({ status }: { status: string }) {
+  if (status === 'running' || status === 'in_progress') return <span className="spinner-dot" aria-label="running" />;
+  if (status === 'done') return <Check size={13} className="agent-ok" aria-label="done" />;
+  if (status === 'declined') return <Ban size={13} className="muted" aria-label="declined" />;
+  if (status === 'error') return <X size={13} className="agent-bad" aria-label="failed" />;
+  return <CircleDot size={11} className="muted" aria-label="to do" />;
+}
+
+/** An agent task: what it does step by step, what it needs approved, what it changed, its answer. */
+function AgentMessage({ m }: { m: AiMessage }) {
+  const app = useApp();
+  const ai = useAi();
+  const v = m.agent as AgentView;
+  const running = v.status === 'starting' || v.status === 'running' || v.status === 'waiting';
+  const steps = v.timeline.filter((t): t is Extract<TimelineItem, { kind: 'step' }> => t.kind === 'step');
+  const [showSteps, setShowSteps] = useState(true);
+  const collapsed = !running && !showSteps;
+  const files = visibleChanges(v);
+  const open = (path: string) => app.setView({ kind: 'file', path });
+  const failed = steps.filter((s) => s.status === 'error').length;
+
+  return (
+    <div className={cls('ai-msg assistant agent-msg', v.status === 'error' && 'error')}>
+      <div className="agent-head">
+        <Bot size={14} aria-hidden />
+        <span>
+          Agent{v.model ? ` · ${v.model}` : ''}
+          {v.local !== undefined && <span className="muted">{v.local ? ' · on your PC' : ' · online API'}</span>}
+          {v.tools === 'prompted' && <span className="muted" title={v.note}> · tools via prompt</span>}
+        </span>
+      </div>
+
+      {v.plan.length > 0 && (
+        <ol className="agent-plan" aria-label="Plan">
+          {v.plan.map((p, i) => (
+            <li key={i} className={cls(p.status === 'done' && 'done')}>
+              <StepIcon status={p.status === 'pending' ? 'todo' : p.status} /> {p.title}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {steps.length > 0 && (
+        <div className="agent-steps">
+          {!running && (
+            <button className="link-btn agent-steps-toggle" onClick={() => setShowSteps(!showSteps)} aria-expanded={!collapsed}>
+              {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />} {steps.length} step{steps.length > 1 ? 's' : ''}
+              {failed ? ` · ${failed} failed` : ''}
             </button>
+          )}
+          {!collapsed && (
+            <ul>
+              {v.timeline.map((t, i) =>
+                t.kind === 'note' ? (
+                  <li key={i} className="agent-note">
+                    {t.text}
+                  </li>
+                ) : (
+                  <li key={t.id} className={cls('agent-step', t.status)}>
+                    <StepIcon status={t.status} />
+                    <span className="agent-step-text">
+                      {t.label}
+                      {t.summary && <span className="muted"> — {t.summary}</span>}
+                      {t.error && <span className="agent-bad"> — {t.error}</span>}
+                    </span>
+                  </li>
+                ),
+              )}
+            </ul>
           )}
         </div>
       )}
+
+      {v.approvals.map((a) => (
+        <div key={a.id} className={cls('agent-approval', a.state)} role={a.state === 'pending' ? 'alertdialog' : undefined} aria-label={a.request.title}>
+          <div className="agent-approval-title">
+            <ShieldQuestion size={15} aria-hidden /> {a.request.title}
+          </div>
+          <p>{a.request.detail}</p>
+          {a.request.paths && a.request.paths.length > 0 && (
+            <ul className="agent-paths">
+              {a.request.paths.slice(0, 30).map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+              {a.request.paths.length > 30 && <li className="muted">…and {a.request.paths.length - 30} more</li>}
+            </ul>
+          )}
+          {a.request.code && <pre className="agent-code">{a.request.code}</pre>}
+          {a.state === 'pending' || a.state === 'sending' ? (
+            <div className="row-actions">
+              <button className="btn small primary" disabled={a.state === 'sending'} onClick={() => ai.answerApproval(m.id, a.id, true)}>
+                Allow
+              </button>
+              <button className="btn small" disabled={a.state === 'sending'} onClick={() => ai.answerApproval(m.id, a.id, false)}>
+                Don’t allow
+              </button>
+            </div>
+          ) : (
+            <p className="muted hint">{a.state === 'approved' ? 'Allowed.' : 'Not allowed.'}</p>
+          )}
+        </div>
+      ))}
+
+      {v.offline && running && (
+        <p className="agent-offline">
+          <WifiOff size={13} aria-hidden /> Connection to your PC lost. Reconnecting… the task continues on the PC.
+        </p>
+      )}
+
+      {running && v.draft && (
+        <div className="agent-draft">
+          <Markdown text={v.draft} />
+        </div>
+      )}
+      {running && !v.approvals.some((a) => a.state === 'pending') && <Spinner label={v.statusText || 'Working…'} />}
+
+      {files.length > 0 && (
+        <div className="agent-files">
+          <div className="agent-files-title">Files {v.undo && v.undo !== 'running' ? '(undone)' : ''}</div>
+          <ul>
+            {files.map((f, i) => (
+              <li key={i}>
+                <span className={cls('agent-badge', f.action)}>{ACTION_LABEL[f.action]}</span>
+                <span className="agent-file-path" title={f.from ? `${f.from} → ${f.path}` : f.path}>
+                  {f.from ? `${f.from} → ` : ''}
+                  {f.path}
+                </span>
+                {f.action !== 'deleted' && !(v.undo && v.undo !== 'running') && (
+                  <button className="link-btn" onClick={() => open(f.path)} title="Open in NoteTOO">
+                    <ExternalLink size={12} /> Open
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {v.final !== undefined && (
+        <div className="agent-final">
+          <Markdown text={v.final} />
+        </div>
+      )}
+      {v.error && <p className="agent-error">{v.error}</p>}
+      {m.settingsHint && (
+        <button className="btn small" onClick={() => ai.setSettingsOpen(true)}>
+          <Settings size={14} /> AI settings
+        </button>
+      )}
+      {v.status === 'stopped' && <p className="muted hint">Stopped.</p>}
+
+      {!running && v.sources.length > 0 && (
+        <p className="ai-sources agent-sources">
+          Sources:{' '}
+          {v.sources.map((s, i) => (
+            <span key={s}>
+              {i > 0 && ', '}
+              <button className="link-btn" onClick={() => open(s)} title={s}>
+                {s.split('/').pop()}
+              </button>
+            </span>
+          ))}
+        </p>
+      )}
+
+      {!running && files.some((f) => f.action !== 'deleted' && f.action !== 'folder') && (
+        <div className="agent-undo">
+          {v.undo === undefined ? (
+            <button className="link-btn" onClick={() => ai.undoAgent(m.id)} title="Put everything back as it was before this task">
+              <Undo2 size={13} /> Undo these changes
+            </button>
+          ) : v.undo === 'running' ? (
+            <span className="muted hint">Undoing…</span>
+          ) : (
+            <span className="muted hint">
+              Undone ({v.undo.undone} change{v.undo.undone === 1 ? '' : 's'}){v.undo.failed.length ? `; not undone: ${v.undo.failed.map((f) => f.replace(/\.+$/, '')).join('; ')}` : ''}.
+            </span>
+          )}
+        </div>
+      )}
+      {m.status === 'done' && v.final && <MessageActions m={{ ...m, text: v.final }} />}
     </div>
   );
 }

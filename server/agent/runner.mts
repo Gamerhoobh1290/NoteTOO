@@ -83,6 +83,8 @@ export class AgentRun {
   private approvals = new Map<string, (ok: boolean) => void>();
   readonly ac = new AbortController();
   undone = false;
+  /** where this run keeps previous versions of the files it changed */
+  backupDir = '';
 
   constructor(readonly req: RunRequest) {}
 
@@ -210,6 +212,7 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
   const sources = new Set<string>();
   const runDir = path.join(d.dataDir, 'agent-runs', run.id);
   const backupDir = path.join(d.dataDir, 'agent-backups', new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '-' + run.id.slice(0, 8));
+  run.backupDir = backupDir;
   const toolLog: { name: string; ok: boolean; label: string }[] = [];
   let finalText = '';
   try {
@@ -417,7 +420,7 @@ async function execute(run: AgentRun, ctx: ToolContext, call: ToolCall): Promise
 export async function undoRun(run: AgentRun): Promise<{ undone: number; failed: string[] }> {
   if (run.undone) return { undone: 0, failed: ['Already undone.'] };
   run.undone = true;
-  const r = await undoChanges(run.req.rootId, run.changes);
+  const r = await undoChanges(run.req.rootId, run.changes, path.join(run.backupDir, 'undone'));
   run.emit({ type: 'undo', ...r });
   return r;
 }

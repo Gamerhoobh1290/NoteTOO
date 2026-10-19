@@ -5,13 +5,15 @@ Chrome/Edge, or [from your laptop's browser with your main PC doing the work](#u
 Everything it creates is saved as normal files in **your own folder**; there is no cloud service and no account. If your folder is synced by OneDrive or Google Drive Desktop, your
 notes and annotations are synced with it. An optional [AI assistant](#ai-assistant) can summarize, explain and highlight
 your files, guide you through the app, and propose how to organize your folder, using a model on your own PC (Ollama) or a
-provider you choose.
+provider you choose. With the NoteTOO server, the [AI agent](#ai-agent-notetoo-server) works with your whole school folder on
+the PC: it finds and reads your files, creates and changes documents, and runs tasks for you.
 
 ## Requirements
 
 - **Google Chrome or Microsoft Edge** (desktop), recent version. NoteTOO uses the File System Access API, which other
   browsers do not support; they get a clear message instead.
-- Node.js 20+ to build and run it.
+- Node.js 20+ to build and run it; the [NoteTOO server](#use-notetoo-from-your-laptop-notetoo-server)'s AI agent needs
+  Node.js 22.13+ (22 LTS or later) to read PDFs.
 
 ## Run it
 
@@ -34,7 +36,7 @@ Other scripts:
 
 | Command | What it does |
 |---|---|
-| `npm test` | Unit tests (path mirroring, sidecar read/write, file operations on an in-memory folder, AI answer validation and organize planning), plus the desktop disk backend and the Receive-from-phone server on a real temporary folder |
+| `npm test` | Unit tests (path mirroring, sidecar read/write, file operations on an in-memory folder, AI answer validation and organize planning), plus the desktop disk backend, the Receive-from-phone server and the NoteTOO server with its AI agent (Ollama and OpenAI wire formats, tools, Python) on a real temporary folder |
 | `npm run sample` | Generates `./sample-school/`, a throwaway test folder (`-- --force` regenerates it) |
 | `npm run server` | Builds the web app and starts the [NoteTOO server](#use-notetoo-from-your-laptop-notetoo-server) (`NoteTOO-Server.cmd` does the same) |
 
@@ -119,13 +121,16 @@ runs there (Ollama on the PC, with its GPU). The laptop needs no installation, n
  ┌─────────────────────┐  HTTP(S), signed-in  ┌─────────────────────────────────────────────┐
  │ NoteTOO web app     │ ───────────────────▶ │ server/app.mts                              │
  │ (same UI as the     │ ◀─────────────────── │  ├ disk.mts: shared folders only            │
- │  desktop app)       │   streamed answers   │  └ AI proxy → Ollama (localhost:11434)      │
+ │  desktop app)       │   streamed answers,  │  ├ AI proxy → Ollama (localhost:11434)      │
+ │                     │   agent progress     │  └ agent/: tools, search index, Python,     │
+ │                     │                      │       model calls (Ollama or an API)        │
  └─────────────────────┘                      └─────────────────────────────────────────────┘
 ```
 
 ### Set it up on the main PC (once)
 
-1. Install [Node.js](https://nodejs.org) 20 or later, and get this NoteTOO folder on the PC.
+1. Install [Node.js](https://nodejs.org) 22 LTS or later (20 works, but then the AI agent cannot read PDFs), and get this
+   NoteTOO folder on the PC. For the agent's scripts, also install [Python](https://python.org) 3.8+ (optional).
 2. Share your school folder. Only shared folders can be opened from the laptop; nothing else on the PC is reachable:
 
    ```bash
@@ -193,8 +198,9 @@ the folder on the PC), rename/move/delete (delete moves to the **PC's** Recycle 
 - **AI:** set it up once from any browser (**✨ AI** → status chip). The settings are kept on the PC and shared by every
   browser. *Ollama (this PC)* with `http://localhost:11434` means Ollama **on the PC**: requests go from the laptop to the
   NoteTOO server, which passes them to Ollama and streams the answer back as it is written. **Stop** stops the model too.
-  Preparing a file for the AI (reading its text, rendering scanned pages for the vision model) still happens in the
-  browser; the model itself always runs on the PC.
+  For the quick actions (Summarize, Explain, Highlight, Organize), preparing a file (reading its text, rendering scanned
+  pages for the vision model) still happens in the browser; the model itself always runs on the PC. The
+  [AI agent](#ai-agent-notetoo-server) does everything on the PC: the laptop only sends the request and shows the progress.
 - **Connection lost** (PC asleep, Wi-Fi drop, server restarted): a red banner says so and NoteTOO keeps checking. Unsaved
   edits stay in the tab; saves that failed show **Retry**. When the PC answers again, the banner goes away.
 - **Signed out** (new key, or 30 days unused): the banner links to the sign-in page in a new tab, so the open tab keeps
@@ -219,7 +225,10 @@ the folder on the PC), rename/move/delete (delete moves to the **PC's** Recycle 
   `tailscale serve` adds HTTPS.
 - **AI forwarding:** the server forwards only the AI requests NoteTOO makes (chat and model list), for signed-in browsers,
   to the AI server set up in NoteTOO.
-- **Settings:** `%APPDATA%\NoteTOO\server.json` (port, shared folders, key, AI settings). Never in your school folder.
+- **AI agent:** works only inside the shared folders, through the same trust boundary; what needs your approval is decided
+  by the server, not by the model (see [Safety](#safety-approvals-and-undo)).
+- **Settings:** `%APPDATA%\NoteTOO\server.json` (port, shared folders, key, AI and agent settings). Never in your school
+  folder.
 
 ## Pick your folder
 
@@ -371,6 +380,98 @@ none of your files or notes are affected.
 Ollama accepts requests from `localhost` pages by default. If you serve NoteTOO from another address, add it to
 Ollama's `OLLAMA_ORIGINS`. (Not needed with the NoteTOO server: it talks to Ollama itself.)
 
+## AI agent (NoteTOO server)
+
+With the [NoteTOO server](#use-notetoo-from-your-laptop-notetoo-server), the AI panel's chat is an **agent**: it works with
+your **whole school folder** on the PC, not just the open file, and it does the work instead of explaining it. You don't
+open or attach anything: it finds the files itself.
+
+```
+You: "Use my management course, the professor's PDF and last week's notes to make a complete revision document."
+Agent (on the PC): plan → find_files / search_content → read_documents (3 files) → create_file .docx (read back to verify)
+                   → answer: what it did, where the file is, sources (file, page), overlaps, contradictions, gaps
+NoteTOO: the new file appears in the sidebar and opens; "Undo these changes" puts everything back.
+```
+
+Things to ask: a revision sheet from several courses (Word), a PowerPoint from your notes, a quiz from several lessons, a
+table or spreadsheet, "where is X explained in my files?", compare two documents, answer a question across a subject,
+extract information from several PDFs, change a document or your notes, reorganize a subject's folders, calculations and
+charts from your data (Python).
+
+**The panel shows** the model and whether it runs on your PC, the plan, every tool step as it happens (with its result
+or error), approvals waiting for you, the files created, changed or moved (with **Open**), the answer streamed as it is
+written, its sources (click to open), and **Undo these changes**. The **Agent** chip in the panel's header turns it off
+(the classic assistant, about the open file). "How do I…" questions about NoteTOO and "highlight …" on an open file still
+use the classic assistant. If the laptop loses the connection, the task keeps running on the PC and the panel catches
+up when it reconnects.
+
+### Tools
+
+One set of tools, the same for every model, executed on the PC:
+
+| Tool | What it does |
+|---|---|
+| `workspace_overview`, `list_folder`, `find_files` | Subjects, sections, folders; files by name words, type, folder, date |
+| `search_content` | Full-text search inside every readable document at once (PDF, Word, PowerPoint, spreadsheets, notes, text, code): best passages with file, page and section |
+| `read_document` | One document: whole, or pages, a section, the passages about a query, or part *n* of a long one (outline first) |
+| `read_documents` | Several documents in one call, focused on a topic, within one size limit |
+| `get_annotations`, `notes` | Your highlights and comments; read or append to a subject's notes or the scratchpad |
+| `create_file` | `.md`, `.txt`, `.csv`, code, and **Word** (`.docx` from Markdown: headings, lists, tables), **PowerPoint** (`.pptx`, one slide per heading), **Excel** (`.xlsx` from tables or CSV, `=` formulas). Every file is read back to verify it |
+| `edit_file`, `edit_spreadsheet` | Exact find/replace, append, rewrite of text files and notes; cells and rows of `.xlsx` |
+| `create_folder`, `move`, `delete` | Folders; moves and renames (annotations follow); delete to the Recycle Bin |
+| `run_python` | A Python script on the PC for what the other tools can't do: calculations, statistics, charts, data, conversions |
+| `update_plan`, `open_in_app` | Shows its plan and progress; opens the result in NoteTOO |
+
+The **search index** is built on the PC the first time the agent is used (the AI settings show its progress), then only
+new and changed files are read again, so files added from NoteTOO, File Explorer or OneDrive are found. It lives in
+`%APPDATA%\NoteTOO\agent-index\`, not in your school folder. Big documents are never sent whole: the agent reads the
+outline, then the pages, sections or passages it needs.
+
+### Local models and API models
+
+The same agent and tools work with **Ollama** (native tool calling, e.g. `qwen3.5:9b`), **OpenRouter**, and any
+**OpenAI-compatible** server (LM Studio, Groq, vLLM, Ollama's `/v1`…). NoteTOO checks what the model supports: models
+without native tool calling, or providers that refuse it, get the tools described in the prompt instead (one JSON
+action per step; slower and less reliable), and tool calls a local model writes as text are recognized too. The context
+size you set decides how much a tool result may hold and when older results are dropped; a request too long for the
+model is shortened and retried. Errors (Ollama not running, model not installed, wrong key, rate limit…) are shown in
+the panel.
+
+Expect differences: a 9B local model handles short tasks well (find, read, summarize, create one document) but can lose
+track in long ones, call the wrong tool, or stop early (NoteTOO nudges it when it describes the work instead of doing
+it, or repeats a call). Large API models plan better and finish long multi-file tasks more reliably. Local models need a
+large enough context (16384 tokens or more) for multi-file work. With an API model, the passages the agent reads are
+sent to that provider.
+
+### Safety, approvals and undo
+
+- **Inside your shared folders only**, through the same trust boundary as the rest of the server; never `.noteTOO`,
+  hidden folders, or links that lead outside.
+- **The server decides what needs you, not the model:** deleting (always; to the Recycle Bin), moving more than 10 items
+  or a whole subject, running a script (by default; see below) and any internet access show **Allow / Don't allow** in
+  the panel with exactly what will happen (the script's code, the paths).
+- **Documents are data, never instructions.** The model is told so, and even if a document tricks it, destructive
+  actions still need your approval.
+- **Every change is journaled**, with the previous version of each changed file kept in
+  `%APPDATA%\NoteTOO\agent-backups\`. **Undo these changes** reverts a whole task (created files go to the Recycle Bin).
+  Every task is logged in `%APPDATA%\NoteTOO\agent-log.jsonl` (request, tools used, files changed).
+- **Python scripts** (AI settings → Agent: *Ask me before each script* (default), *Run them without asking*, or *Never*)
+  run with your school folder as working directory, a time limit (60 s by default, the whole process tree is stopped),
+  capped output, and a guard (Python audit hooks) that blocks writing outside the school folder, reading your other
+  personal files, deleting, starting programs, native code and network access unless you approved it; files a script
+  changes are backed up first. The guard prevents mistakes and tricks from documents; it is not a sandbox against
+  deliberately hostile code, which is why scripts are shown to you by default. Install the libraries you want scripts
+  to use (`py -m pip install pandas matplotlib python-docx openpyxl`).
+
+### Limits
+
+- Needs the NoteTOO server (not the desktop app on its own, nor a plain browser folder).
+- No OCR: scanned PDFs and images have no text for the agent; `.doc`, `.ppt` and other old formats can't be read
+  (save them as `.docx`/`.pptx`/PDF).
+- Rewriting an existing `.docx`/`.pptx` regenerates it from Markdown (its original styling is lost; the old version is
+  backed up). Formulas in a created `.xlsx` are computed when Excel opens it.
+- Script memory is limited on Linux/macOS only; on Windows only the time is limited.
+
 ## Not supported
 
 - **Browsers other than Chrome/Edge**, and mobile browsers.
@@ -414,7 +515,14 @@ electron/receive.mts     desktop app: Receive from phone, the LAN upload server 
 server/main.mts          NoteTOO server: command line (start, --add-folder, --list…), listening, startup banner
 server/app.mts           NoteTOO server: sign-in, address/host/origin checks, the disk calls (the desktop app's IPC
                          channels over HTTP, via disk.mts), file streaming, the AI proxy, serving dist/
-server/config.mts        NoteTOO server: %APPDATA%\NoteTOO\server.json (shared folders, key, AI settings)
+server/config.mts        NoteTOO server: %APPDATA%\NoteTOO\server.json (shared folders, key, AI and agent settings)
+server/agent/            NoteTOO server: the AI agent, run on the PC
+  runner.mts             the loop (plan, tool calls, approvals, context budget, nudges), resumable events
+  providers.mts          one tool-call format for Ollama and OpenAI-compatible APIs; prompted fallback
+  tools.mts              the tool registry, approvals, change journal and undo
+  index.mts, extract.mts file inventory and full-text index; PDF/Word/PowerPoint/spreadsheet reading in Node.js
+  office.mts             .docx/.pptx/.xlsx from Markdown; python.mts: guarded Python scripts
+  service.mts            runs and indexes per shared folder; agent.test.ts: end to end with Ollama/OpenAI wire formats
 server/recycle.mts       NoteTOO server: Recycle Bin without Electron; server/login.html is the sign-in page
 NoteTOO-Server.cmd       double-click launcher for the server (installs, builds, starts)
 src/
@@ -426,7 +534,8 @@ src/
   desktop/bridge.ts      the desktop bridge contract; desktop/serverBridge.ts carries it over HTTP to the server
   state/AppContext.tsx   app state (in memory) and file operations (create/rename/move/delete/add)
   state/useDiskDoc.ts    file-backed document: load, debounced save, conflict detection
-  state/AiContext.tsx    AI assistant state: conversation, running task, highlight suggestions, organize review
+  state/AiContext.tsx    AI assistant state: conversation, running task, highlight suggestions, organize review, agent tasks
+  ai/agentClient.ts      the page's side of the agent: start, follow (reconnecting), approve, stop, undo; agentView.ts
   ai/client.ts           the only module that talks to an AI server (Ollama native API or OpenAI-compatible)
   ai/extract.ts          file -> text per page (with positions for highlights) or images for the vision model
   ai/tasks.ts            prompts and steps of each AI feature (long files are read in parts)

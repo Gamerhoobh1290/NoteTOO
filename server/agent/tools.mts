@@ -952,7 +952,7 @@ def({
       const ok = await ctx.approve({
         tool: 'run_python',
         title: net ? 'Run a script WITH internet access?' : 'Run a Python script on your PC?',
-        detail: `${str(a, 'purpose', false) || 'No purpose given.'} It can read and write in your school folder only${net ? ' and use the internet' : ''}; files it changes are backed up.`,
+        detail: `${(str(a, 'purpose', false) || 'No purpose given').replace(/[.!?\s]*$/, '.')} It can read and write in your school folder only${net ? ' and use the internet' : ''}; files it changes are backed up.`,
         code,
       });
       if (!ok) return { ok: false, content: 'The user declined to run this script. Do it another way, or explain what is needed.', summary: 'declined by you' };
@@ -1039,15 +1039,25 @@ export function checkArgs(t: Tool, args: Record<string, unknown>): string | null
   return `Missing required argument${missing.length > 1 ? 's' : ''} ${missing.map((k) => `"${k}"`).join(', ')} for ${t.spec.name}. Its arguments: ${Object.keys(schema.properties ?? {}).join(', ')}.`;
 }
 
-/** Undoes a run's changes, newest first. Returns what could not be undone. */
-export async function undoChanges(rootId: string, changes: Change[]): Promise<{ undone: number; failed: string[] }> {
+/**
+ * Undoes a run's changes, newest first. Files the run created go to the Recycle Bin, or into
+ * `stashDir` (outside the school folder) where there is none. Returns what could not be undone.
+ */
+export async function undoChanges(rootId: string, changes: Change[], stashDir: string): Promise<{ undone: number; failed: string[] }> {
   const failed: string[] = [];
   let undone = 0;
   for (const c of [...changes].reverse()) {
     try {
       if (c.action === 'created') {
         const r = await disk.trash(rootId, c.path);
-        if (!r.ok && r.name !== 'NotFoundError') throw new Error(r.message);
+        if (!r.ok && r.name !== 'NotFoundError') {
+          const dest = path.join(stashDir, ...c.path.split('/'));
+          await fsp.mkdir(path.dirname(dest), { recursive: true });
+          await fsp.rename(disk.resolveIn(rootId, c.path), dest).catch(async () => {
+            await fsp.copyFile(disk.resolveIn(rootId, c.path), dest);
+            await fsp.rm(disk.resolveIn(rootId, c.path));
+          });
+        }
       } else if (c.action === 'modified') {
         if (!c.backup || !existsSync(c.backup)) throw new Error('no backup');
         const data = await fsp.readFile(c.backup);
