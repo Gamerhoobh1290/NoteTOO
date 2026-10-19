@@ -24,6 +24,8 @@ export interface ServerConfig {
   hosts: string[];
   /** The AI settings (src/ai/settings.ts), shared by every browser; validated by the page. */
   ai: Record<string, unknown> | null;
+  /** The agent's settings (server/agent/tools.mts: scripts, Python, steps). */
+  agent: Record<string, unknown> | null;
 }
 
 export const samePath = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
@@ -43,6 +45,7 @@ function parse(raw: Partial<ServerConfig>): ServerConfig {
     last: typeof raw.last === 'string' ? raw.last : null,
     hosts: strings(raw.hosts).map((h) => h.toLowerCase()),
     ai: raw.ai && typeof raw.ai === 'object' && !Array.isArray(raw.ai) ? raw.ai : null,
+    agent: raw.agent && typeof raw.agent === 'object' && !Array.isArray(raw.agent) ? raw.agent : null,
   };
 }
 

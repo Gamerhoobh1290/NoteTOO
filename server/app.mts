@@ -12,8 +12,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync, promises as fsp } from 'node:fs';
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { lookup as dnsLookup } from 'node:dns';
-import { isIP, type LookupFunction } from 'node:net';
+import { isIP } from 'node:net';
 import { hostname } from 'node:os';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
@@ -21,6 +20,11 @@ import * as disk from '../electron/disk.mjs';
 import { Lockout, keyMatches } from '../electron/receive.mjs';
 import type { RootInfo } from '../src/desktop/bridge.js';
 import { samePath, type ConfigStore } from './config.mjs';
+import { isLinkLocal, noLinkLocal } from './net.mjs';
+import { AgentUnavailable, createAgentService } from './agent/service.mjs';
+import { undoRun, type AgentEvent } from './agent/runner.mjs';
+
+export { isLinkLocal };
 
 const COOKIE = 'notetoo_session';
 const SESSION_DAYS = 30;
@@ -124,28 +128,6 @@ function hostOf(h: string): string {
   return s.replace(/:\d+$/, '');
 }
 
-/** Link-local address, in any notation (IPv6 in brackets, IPv4-mapped IPv6 in dotted or hex form). */
-export function isLinkLocal(raw: string): boolean {
-  let a = raw.replace(/^\[|\]$/g, '').toLowerCase();
-  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(a);
-  if (mapped) {
-    const [hi, lo] = [parseInt(mapped[1], 16), parseInt(mapped[2], 16)];
-    a = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
-  }
-  return /^(::ffff:)?169\.254\./.test(a) || /^fe[89ab][0-9a-f]:/.test(a);
-}
-
-/** DNS lookup for AI requests that refuses link-local addresses (cloud metadata services and the like). */
-const noLinkLocal: LookupFunction = (host, opts, cb) => {
-  dnsLookup(host, opts, (err, address, family) => {
-    const all = Array.isArray(address) ? address.map((a) => a.address) : [address as string];
-    if (!err && all.some(isLinkLocal)) {
-      return cb(Object.assign(new Error(`${host} is not an AI server address.`), { code: 'EADDRNOTAVAIL' }), address as string, family);
-    }
-    cb(err, address as string, family);
-  });
-};
-
 // ---------- session cookies ----------
 
 const sign = (secret: string, exp: number) => createHmac('sha256', secret).update(`notetoo-session.${exp}`).digest('base64url');
@@ -246,6 +228,16 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
     if (typeof id !== 'string' || !sharedIds().has(id)) throw new HttpError(403, 'This folder is not shared by the NoteTOO server.');
   };
 
+  /** Absolute path of a shared folder by id (and registered with disk.mts). */
+  const rootPath = (id: unknown): string => {
+    requireRoot(id);
+    const p = store.get().folders.find((f) => disk.openRoot(f).id === id);
+    if (!p || !disk.rootExists(id as string)) throw new HttpError(404, 'This folder is no longer available on the PC.');
+    return p;
+  };
+
+  const agent = createAgentService(store);
+
   /** Unfinished writes and when they were last used (see WRITE_IDLE_MS). */
   const writes = new Map<string, number>();
   const sweeper = setInterval(() => {
@@ -296,6 +288,10 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
     'disk:trash': onRoot(disk.trash),
     'disk:move': onRoot(disk.move),
     'disk:same-entry': onRoot(disk.sameEntry),
+
+    'agent:get-settings': () => agent.settings(),
+    'agent:set-settings': (s) => agent.setSettings(s),
+    'agent:status': (id) => agent.status(id as string, rootPath(id)),
 
     'ai:get-settings': () => store.get().ai,
     'ai:set-settings': (s) => {
@@ -422,6 +418,73 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
     req.pipe(up);
   }
 
+  // ---------- the agent (server/agent/) ----------
+
+  async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
+    const b = (await readJson(req)) as { root?: unknown; message?: unknown; history?: unknown; view?: unknown } | null;
+    const message = typeof b?.message === 'string' ? b.message.trim() : '';
+    if (!message || message.length > 20_000) throw new HttpError(400, 'Invalid request.');
+    const root = rootPath(b?.root);
+    const history = (Array.isArray(b?.history) ? b.history : [])
+      .filter((h): h is { role: 'user' | 'assistant'; content: string } => !!h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string')
+      .slice(-20);
+    const v = (b?.view && typeof b.view === 'object' ? b.view : {}) as Record<string, unknown>;
+    const text = (x: unknown, max: number) => (typeof x === 'string' && x ? x.slice(0, max) : undefined);
+    try {
+      const r = agent.start({
+        rootId: b!.root as string,
+        rootPath: root,
+        message,
+        history,
+        view: { openPath: text(v.openPath, 1000), subject: text(v.subject, 300), selection: text(v.selection, 4000) },
+      });
+      sendJson(res, 200, { id: r.id });
+    } catch (e) {
+      if (e instanceof AgentUnavailable) throw new HttpError(409, e.message);
+      throw e;
+    }
+  }
+
+  async function agentRun(req: http.IncomingMessage, res: http.ServerResponse, id: string, action: string, url: URL) {
+    const r = agent.get(id);
+    if (!r) return sendJson(res, 404, { error: 'This agent task is no longer on the PC (NoteTOO was restarted, or it is too old).' });
+    if (action === 'events') {
+      if (req.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
+      const after = Number(url.searchParams.get('after') ?? req.headers['last-event-id'] ?? 0) || 0;
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
+      res.flushHeaders();
+      let ended = false;
+      const write = (e: AgentEvent) => {
+        if (ended) return;
+        res.write(`id: ${e.seq}\ndata: ${JSON.stringify(e)}\n\n`);
+        if (e.type === 'end') {
+          ended = true;
+          // Undo events can still follow: the page reconnects for those only when it asks to undo.
+          setImmediate(() => res.end());
+        }
+      };
+      const unsubscribe = r.subscribe(after, write);
+      const ping = setInterval(() => res.write(': ping\n\n'), 15_000);
+      res.on('close', () => {
+        clearInterval(ping);
+        unsubscribe();
+      });
+      return;
+    }
+    if (req.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+    if (action === 'stop') {
+      r.stop();
+      return sendJson(res, 200, { ok: true });
+    }
+    if (action === 'approve') {
+      const b = (await readJson(req)) as { id?: unknown; approved?: unknown } | null;
+      return sendJson(res, 200, { ok: typeof b?.id === 'string' && r.approve(b.id, b.approved === true) });
+    }
+    // undo
+    if (!r.finishedAt) throw new HttpError(409, 'Wait for the task to finish (or stop it) before undoing it.');
+    return sendJson(res, 200, await undoRun(r));
+  }
+
   async function serveStatic(res: http.ServerResponse, pathname: string) {
     let rel: string;
     try {
@@ -509,6 +572,9 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
       return sendJson(res, 200, r);
     }
     if (p.startsWith('/api/file/') && reading) return serveFile(req, res, p.slice('/api/file/'.length));
+    if (p === '/api/agent/runs' && method === 'POST') return startRun(req, res);
+    const run = /^\/api\/agent\/runs\/([0-9a-f-]{36})\/(events|stop|approve|undo)$/.exec(p);
+    if (run) return agentRun(req, res, run[1], run[2], url);
     if (p.startsWith('/api/ai/') && (method === 'POST' || method === 'GET')) return proxyAi(req, res, p.slice('/api/ai'.length));
     if (p.startsWith('/api/')) return sendJson(res, 404, { error: 'Not found.' });
     if (!reading) return send(res, 405, 'Method not allowed.');
@@ -526,6 +592,7 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
     },
     async close() {
       clearInterval(sweeper);
+      agent.stopAll();
       await Promise.all([...writes.keys()].map((id) => disk.abortWrite(id)));
       writes.clear();
     },

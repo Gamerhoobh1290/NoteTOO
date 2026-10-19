@@ -1,7 +1,23 @@
 // Pure text helpers for the AI features (unit-tested): page text with positions, finding a
 // quoted passage, and the text budget of a request.
 
-import type { Rect } from '../fs/sidecar';
+import type { Rect } from '../fs/geometry.js';
+
+export type TextFormat = 'pdf' | 'markdown' | 'docx' | 'sheet' | 'text' | 'code' | 'slides';
+
+/** A document's text, as the AI reads it (from the page's extract.ts or the server's). */
+export interface TextDoc {
+  kind: 'text';
+  /** one entry per PDF page (or slide); a single entry for other files */
+  pages: string[];
+  paged: boolean;
+  /** PDF only: page text with positions, for placing highlights and finding headings */
+  layout?: PageText[];
+  /** text was cut at `maxChars` */
+  truncated: boolean;
+  /** what the text came from: decides how its structure is read */
+  format: TextFormat;
+}
 
 /** A run of characters of the page text and where it is drawn (normalized 0–1 page coordinates). */
 export interface TextSpan {

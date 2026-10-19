@@ -1,6 +1,7 @@
 // Annotation sidecar format: `.noteTOO/<file path>.annotations.json`.
 
 import type { Fs } from './fsService';
+import type { Rect } from './geometry';
 import { baseName, brokenBackupPath, parentPath, sidecarPath } from './paths';
 
 export const COLORS = ['yellow', 'green', 'pink', 'blue'] as const;
@@ -9,12 +10,7 @@ export const AI_COLOR = 'purple';
 export type Color = (typeof COLORS)[number] | typeof AI_COLOR;
 const ALL_COLORS: readonly string[] = [...COLORS, AI_COLOR];
 
-export interface Rect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+export type { Rect };
 export interface Point {
   x: number;
   y: number;

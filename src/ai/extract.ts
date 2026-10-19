@@ -6,27 +6,11 @@ import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { fileKind } from '../lib/fileKinds';
 import { loadPdf } from '../lib/pdf';
 import { readSheets } from '../lib/sheets';
-import type { PageText, TextSpan } from './text';
+import type { PageText, TextDoc, TextFormat, TextSpan } from './text';
 
-export type TextFormat = 'pdf' | 'markdown' | 'docx' | 'sheet' | 'text' | 'code';
+export type { TextDoc, TextFormat };
 
-export type AiDoc =
-  | {
-      kind: 'text';
-      /** one entry per PDF page; a single entry for other files */
-      pages: string[];
-      paged: boolean;
-      /** PDF only: page text with positions, for placing highlights */
-      layout?: PageText[];
-      /** text was cut at `maxChars` */
-      truncated: boolean;
-      /** what the text came from: decides how its structure is read */
-      format: TextFormat;
-    }
-  | { kind: 'image'; images: string[]; scanned: boolean }
-  | { kind: 'none'; reason: string };
-
-export type TextDoc = Extract<AiDoc, { kind: 'text' }>;
+export type AiDoc = TextDoc | { kind: 'image'; images: string[]; scanned: boolean } | { kind: 'none'; reason: string };
 
 export interface ReadOptions {
   /** stop reading after this many characters (e.g. a short snippet for organizing) */
