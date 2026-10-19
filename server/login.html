@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sign in – NoteTOO</title>
+<link rel="icon" href="/icon.png">
+<style>
+:root { --bg: #f4f4f1; --card: #fbfbf9; --text: #19191c; --muted: #6b6b73; --line: #e2e2dc; --accent: #3d5afe; --danger: #c62828; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121214; --card: #161619; --text: #ececef; --muted: #9a9aa3; --line: #2a2a30; --accent: #8c9eff; --danger: #ef9a9a; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 28px; }
+h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.02em; }
+p { margin: 0 0 18px; color: var(--muted); }
+label { display: block; font-weight: 600; margin-bottom: 6px; }
+input { width: 100%; padding: 10px 12px; font: 600 18px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+button { width: 100%; margin-top: 14px; padding: 11px; font: inherit; font-weight: 600; color: #fff; background: var(--accent);
+  border: 0; border-radius: 8px; cursor: pointer; }
+button:disabled { opacity: 0.6; cursor: default; }
+.error { min-height: 1.5em; margin: 10px 0 0; color: var(--danger); }
+.hint { margin: 18px 0 0; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>NoteTOO</h1>
+  <p>Your files and AI stay on your PC. Enter the access key shown in the NoteTOO server window there.</p>
+  <form id="form">
+    <label for="key">Access key</label>
+    <input id="key" name="key" autocomplete="current-password" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX" required autofocus>
+    <button id="go" type="submit">Sign in</button>
+    <p class="error" id="error" role="alert"></p>
+  </form>
+  <p class="hint">Lost the key? On the PC, run <code>NoteTOO-Server.cmd --list</code>.</p>
+</main>
+<script>
+const form = document.getElementById('form');
+const err = document.getElementById('error');
+const go = document.getElementById('go');
+// Only a path on this server, never another site.
+let next = '/';
+try {
+  const u = new URL(new URLSearchParams(location.search).get('next') || '/', location.origin);
+  if (u.origin === location.origin) next = u.pathname + u.search + u.hash;
+} catch {}
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  err.textContent = '';
+  go.disabled = true;
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: document.getElementById('key').value }),
+    });
+    if (res.ok) return location.replace(next);
+    const j = await res.json().catch(() => ({}));
+    err.textContent = j.error || 'Could not sign in (' + res.status + ').';
+  } catch {
+    err.textContent = "Can't reach NoteTOO on your PC. Is the server running?";
+  } finally {
+    go.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

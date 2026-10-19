@@ -1,8 +1,8 @@
 # NoteTOO
 
-A local app to organize, preview and annotate your school files, as a [Windows desktop app](#windows-desktop-app) or in
-Chrome/Edge. Everything it creates is saved as normal files in
-**your own folder**; there is no backend and no account. If your folder is synced by OneDrive or Google Drive Desktop, your
+A local app to organize, preview and annotate your school files, as a [Windows desktop app](#windows-desktop-app), in
+Chrome/Edge, or [from your laptop's browser with your main PC doing the work](#use-notetoo-from-your-laptop-notetoo-server).
+Everything it creates is saved as normal files in **your own folder**; there is no cloud service and no account. If your folder is synced by OneDrive or Google Drive Desktop, your
 notes and annotations are synced with it. An optional [AI assistant](#ai-assistant) can summarize, explain and highlight
 your files, guide you through the app, and propose how to organize your folder, using a model on your own PC (Ollama) or a
 provider you choose.
@@ -36,6 +36,7 @@ Other scripts:
 |---|---|
 | `npm test` | Unit tests (path mirroring, sidecar read/write, file operations on an in-memory folder, AI answer validation and organize planning), plus the desktop disk backend and the Receive-from-phone server on a real temporary folder |
 | `npm run sample` | Generates `./sample-school/`, a throwaway test folder (`-- --force` regenerates it) |
+| `npm run server` | Builds the web app and starts the [NoteTOO server](#use-notetoo-from-your-laptop-notetoo-server) (`NoteTOO-Server.cmd` does the same) |
 
 ## Windows desktop app
 
@@ -106,6 +107,119 @@ over your own Wi-Fi: no cloud, no account, nothing leaves your network.
   answers on this PC's private network addresses, rejects other host names and cross-site requests, accepts only
   photos and videos up to 4 GB each (keeping 1 GB of disk free), and only writes inside the opened folder (never in
   `.noteTOO` or hidden folders, never through links or short names that lead elsewhere).
+
+## Use NoteTOO from your laptop (NoteTOO server)
+
+Your main PC runs the **NoteTOO server**; your laptop just opens NoteTOO in its browser. Everything happens on the PC:
+your files and notes stay there (nothing is copied or synced to the laptop), every change is saved there, and the AI
+runs there (Ollama on the PC, with its GPU). The laptop needs no installation, no AI and no copy of your folder.
+
+```
+ Laptop (any browser)                      Main PC (NoteTOO server, Node.js)
+ ┌─────────────────────┐  HTTP(S), signed-in  ┌─────────────────────────────────────────────┐
+ │ NoteTOO web app     │ ───────────────────▶ │ server/app.mts                              │
+ │ (same UI as the     │ ◀─────────────────── │  ├ disk.mts: shared folders only            │
+ │  desktop app)       │   streamed answers   │  └ AI proxy → Ollama (localhost:11434)      │
+ └─────────────────────┘                      └─────────────────────────────────────────────┘
+```
+
+### Set it up on the main PC (once)
+
+1. Install [Node.js](https://nodejs.org) 20 or later, and get this NoteTOO folder on the PC.
+2. Share your school folder. Only shared folders can be opened from the laptop; nothing else on the PC is reachable:
+
+   ```bash
+   NoteTOO-Server.cmd --add-folder "D:\OneDrive\École"
+   ```
+
+   On the first start, the folders the desktop app already knows are shared automatically.
+3. Start it: **double-click `NoteTOO-Server.cmd`**. The first time it installs dependencies; every start builds the app
+   (a few seconds) and then shows:
+
+   ```
+   On this PC:           http://localhost:8787
+   Same Wi-Fi / network: http://192.168.1.89:8787
+   Tailscale (anywhere): http://100.101.102.103:8787
+   Access key: T5DM-HJTM-E3W4
+   ```
+
+   Keep the window open: closing it (or `Ctrl+C`) stops NoteTOO for the laptop. The PC must stay on and awake
+   (Settings → System → Power: set *Sleep* to *Never* when plugged in, or long enough for your sessions).
+4. The first time, Windows Firewall asks whether **Node.js** may use the network: allow it on **private networks**.
+
+To start it automatically when you sign in to the PC: press `Win+R`, type `shell:startup`, and put a shortcut to
+`NoteTOO-Server.cmd` in that folder.
+
+Other commands: `NoteTOO-Server.cmd --list` (shared folders, port and access key), `--remove-folder <path>`,
+`--new-key` (signs every browser out), `--port <n>`, `--help`. They apply to a running server right away.
+
+### On the laptop, at home
+
+Open the **Same Wi-Fi / network** address in any browser (Chrome, Edge, Firefox, Safari), type the access key once, and
+pick your folder. The browser stays signed in (30 days, renewed while you use it). Bookmark the address.
+
+The PC's address can change when the router restarts. To keep it, give the PC a fixed address in your router (DHCP
+reservation), or use the Tailscale address at home too (it never changes).
+
+### From anywhere: Tailscale (recommended)
+
+[Tailscale](https://tailscale.com) (free for personal use) puts your devices in a private, encrypted network. Nothing is
+opened to the internet: no port forwarding, and only your own devices can reach the PC.
+
+1. Install Tailscale on the **PC** and the **laptop** and sign in with the same account on both.
+2. On the laptop, open the **Tailscale (anywhere)** address the server shows (`http://100.x.y.z:8787`), or use the PC's
+   name: `http://<pc-name>:8787` (Tailscale's MagicDNS). Traffic between the two is encrypted by Tailscale (WireGuard),
+   even though the address says `http`.
+3. **HTTPS with a real certificate** (optional, recommended): in the Tailscale admin console, enable *MagicDNS* and
+   *HTTPS certificates* (DNS page), then on the PC run once:
+
+   ```bash
+   tailscale serve --bg 8787
+   ```
+
+   NoteTOO is then at `https://<pc-name>.<your-tailnet>.ts.net`, for your devices only. This also works when Windows
+   Firewall blocks the Tailscale network, because Tailscale connects to the server on the PC itself. To allow *only*
+   this route, start the server with `NoteTOO-Server.cmd --host 127.0.0.1`.
+
+Never forward the server's port on your router or expose it to the internet. It is meant for your home network and your
+Tailscale network only (it refuses requests from public addresses anyway).
+
+### What works the same, and what's different
+
+Everything in NoteTOO works from the laptop: browsing, previews (PDF, images, Office files, audio/video streamed with
+seeking), annotations, notes and the scratchpad, search, drag and drop (files dropped from the laptop are uploaded into
+the folder on the PC), rename/move/delete (delete moves to the **PC's** Recycle Bin), and the AI assistant.
+
+- **AI:** set it up once from any browser (**✨ AI** → status chip). The settings are kept on the PC and shared by every
+  browser. *Ollama (this PC)* with `http://localhost:11434` means Ollama **on the PC**: requests go from the laptop to the
+  NoteTOO server, which passes them to Ollama and streams the answer back as it is written. **Stop** stops the model too.
+  Preparing a file for the AI (reading its text, rendering scanned pages for the vision model) still happens in the
+  browser; the model itself always runs on the PC.
+- **Connection lost** (PC asleep, Wi-Fi drop, server restarted): a red banner says so and NoteTOO keeps checking. Unsaved
+  edits stay in the tab; saves that failed show **Retry**. When the PC answers again, the banner goes away.
+- **Signed out** (new key, or 30 days unused): the banner links to the sign-in page in a new tab, so the open tab keeps
+  your edits; sign in there, then **Retry**.
+- **Edits on the PC and the laptop at the same time** are handled like sync conflicts: NoteTOO notices the change and
+  asks which version to keep.
+- Not available from the laptop: opening files in Windows programs or File Explorer, the theme button (the browser
+  follows the laptop's light/dark setting), and Receive from phone (use the desktop app on the PC for that).
+
+### Security
+
+- **Sign-in:** a 12-character access key (60 random bits), shown only in the server window or with `--list`. Ten wrong
+  keys lock that device out for 10 minutes. The session cookie is signed, `HttpOnly` and `SameSite=Strict`.
+- **Only your networks:** the server answers only to private (home network), link-local and Tailscale addresses, only
+  under this PC's own names or IP addresses (protection against DNS rebinding), and accepts changes only from its own
+  pages (no cross-site requests, no CORS).
+- **Only your shared folders:** the browser names a folder and a path inside it; the server refuses anything outside the
+  shared folders (`..`, other drives, links). This is the desktop app's trust boundary (`electron/disk.mts`). Files are
+  served so that they can never run as a page.
+- **Encryption:** on your home network the traffic is plain HTTP: the key keeps others out, but someone on the same Wi-Fi
+  could read the traffic. Fine at home, not on public Wi-Fi. Away from home, Tailscale encrypts everything, and
+  `tailscale serve` adds HTTPS.
+- **AI forwarding:** the server forwards only the AI requests NoteTOO makes (chat and model list), for signed-in browsers,
+  to the AI server set up in NoteTOO.
+- **Settings:** `%APPDATA%\NoteTOO\server.json` (port, shared folders, key, AI settings). Never in your school folder.
 
 ## Pick your folder
 
@@ -255,7 +369,7 @@ key must never be written into your synced school folder. Clearing browser data 
 none of your files or notes are affected.
 
 Ollama accepts requests from `localhost` pages by default. If you serve NoteTOO from another address, add it to
-Ollama's `OLLAMA_ORIGINS`.
+Ollama's `OLLAMA_ORIGINS`. (Not needed with the NoteTOO server: it talks to Ollama itself.)
 
 ## Not supported
 
@@ -271,9 +385,9 @@ Ollama's `OLLAMA_ORIGINS`.
 - **Password-protected PDFs.**
 - **Dropping folders** from your PC (drop the files instead, or create a subfolder first).
 - By design (out of scope): text-selection highlighting, timestamped comments on audio/video, editing original files, OCR,
-  accounts, a backend and real-time collaboration. The only network requests are the AI assistant's, to the server you
-  configure; the only network listener is Receive from phone (desktop app), on your local network and only while it is
-  switched on.
+  accounts, a cloud backend and real-time collaboration. The only network requests are the AI assistant's, to the server
+  you configure; the only network listeners are Receive from phone (desktop app), on your local network and only while
+  it is switched on, and the [NoteTOO server](#use-notetoo-from-your-laptop-notetoo-server) while you run it.
 
 ## Notes and limitations
 
@@ -297,12 +411,19 @@ electron/disk.mts        desktop app: disk access for the opened folder (the tru
 electron/preload.cts     desktop app: the narrow window.notetoo bridge (contract: src/desktop/bridge.ts)
 electron/receive.mts     desktop app: Receive from phone, the LAN upload server (key, lockout, host check, streaming
                          uploads into disk.mts); electron/receive-page.html is the page it serves to the phone
+server/main.mts          NoteTOO server: command line (start, --add-folder, --list…), listening, startup banner
+server/app.mts           NoteTOO server: sign-in, address/host/origin checks, the disk calls (the desktop app's IPC
+                         channels over HTTP, via disk.mts), file streaming, the AI proxy, serving dist/
+server/config.mts        NoteTOO server: %APPDATA%\NoteTOO\server.json (shared folders, key, AI settings)
+server/recycle.mts       NoteTOO server: Recycle Bin without Electron; server/login.html is the sign-in page
+NoteTOO-Server.cmd       double-click launcher for the server (installs, builds, starts)
 src/
   fs/fsService.ts        the only module that touches the File System Access API
   fs/paths.ts            pure path rules: sections, ignore list, sidecar path mirroring, name validation
   fs/sidecar.ts          sidecar parsing/validation/serialization and broken-file backup
   fs/memoryFs.ts         in-memory folder used by tests and the dev-only sample mode
-  fs/nativeFs.ts         desktop app: the same handle interface, backed by electron/disk.mts
+  fs/nativeFs.ts         desktop app and NoteTOO server: the same handle interface, backed by electron/disk.mts
+  desktop/bridge.ts      the desktop bridge contract; desktop/serverBridge.ts carries it over HTTP to the server
   state/AppContext.tsx   app state (in memory) and file operations (create/rename/move/delete/add)
   state/useDiskDoc.ts    file-backed document: load, debounced save, conflict detection
   state/AiContext.tsx    AI assistant state: conversation, running task, highlight suggestions, organize review

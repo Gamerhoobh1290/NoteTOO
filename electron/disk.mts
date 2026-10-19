@@ -1,12 +1,12 @@
 // Main-process disk access for the folders the user opened. This is the trust boundary: the page
 // only names (folder id, relative path) pairs, and every path is resolved here and refused when it
 // would leave that folder. Errors are returned as DOMException names that fsService understands.
+// Plain Node.js (no Electron): the desktop app and the NoteTOO server (server/) both use it.
 
 import { createReadStream, existsSync, promises as fsp, statSync, type Stats } from 'node:fs';
 import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
-import { shell } from 'electron';
 import type { DiskEntry, DiskErrorName, DiskMeta, DiskResult, RootInfo } from '../src/desktop/bridge.js';
 
 class DiskError extends Error {
@@ -21,10 +21,14 @@ class DiskError extends Error {
 /** Folders opened in this session, by id. Kept for the whole session so late saves still land. */
 const roots = new Map<string, string>();
 
+/**
+ * The id is derived from the path, so it is the same after a restart: a browser connected to the
+ * NoteTOO server keeps working with the folder it had open.
+ */
 export function openRoot(dir: string): RootInfo {
   const full = path.resolve(dir);
-  let id = [...roots].find(([, p]) => p.toLowerCase() === full.toLowerCase())?.[0];
-  if (!id) roots.set((id = randomUUID()), full);
+  const id = createHash('sha256').update(full.toLowerCase()).digest('hex').slice(0, 32);
+  if (!roots.has(id)) roots.set(id, full);
   return { id, path: full, name: path.basename(full) || full };
 }
 
@@ -244,12 +248,20 @@ export async function abortWrite(writeId: string) {
 
 // ----- delete, move -----
 
+/** Moves an absolute path to the Recycle Bin; provided by the host (Electron's shell, or the server). */
+let trashItem: (full: string) => Promise<void> = async () => {
+  throw new Error('No Recycle Bin is available.');
+};
+export function setTrash(fn: (full: string) => Promise<void>) {
+  trashItem = fn;
+}
+
 export function trash(id: string, rel: string) {
   return run(id, rel, async () => {
     const full = resolveIn(id, rel, false);
     await fsp.stat(full); // reports a missing entry as NotFound
     try {
-      await shell.trashItem(full);
+      await trashItem(full);
     } catch (e) {
       throw new DiskError('Error', `Could not move ${label(full)} to the Recycle Bin: ${(e as Error).message}`);
     }
@@ -349,16 +361,3 @@ export function fileUrl(id: string, rel: string): string {
   return `${FILE_SCHEME}://${id}/${rel.split('/').filter(Boolean).map(encodeURIComponent).join('/')}`;
 }
 
-// ----- Windows integration -----
-
-export async function openPath(id: string, rel: string): Promise<string | null> {
-  try {
-    return (await shell.openPath(resolveIn(id, rel))) || null;
-  } catch (e) {
-    return mapError(e, id, rel).message;
-  }
-}
-
-export function showInFolder(id: string, rel: string): void {
-  shell.showItemInFolder(resolveIn(id, rel));
-}

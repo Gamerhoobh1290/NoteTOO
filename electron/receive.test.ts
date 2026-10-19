@@ -8,8 +8,6 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('electron', () => ({ shell: {} }));
-
 const disk = await import('./disk.mts');
 const { Lockout, keyMatches, lanAddresses, makeKey, normalizeKey, sanitizeFileName, startReceiver } = await import('./receive.mts');
 type Receiver = Awaited<ReturnType<typeof startReceiver>>;

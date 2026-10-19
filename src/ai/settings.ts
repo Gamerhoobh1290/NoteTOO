@@ -1,8 +1,12 @@
 // AI settings for THIS browser/PC. The only thing NoteTOO keeps in browser storage, on purpose:
 // each PC has its own setup (e.g. Ollama on a desktop, OpenRouter on a laptop) and an API key
 // must never end up in the synced school folder. Losing it only means re-entering it.
+// Connected to the NoteTOO server, they are kept on the PC instead (server.json): that PC runs the
+// AI, and every browser that connects uses the same setup.
 
 import { useSyncExternalStore } from 'react';
+import { desktop } from '../desktop/bridge';
+import { serverCall } from '../desktop/serverBridge';
 
 export type Provider = 'ollama' | 'openai';
 
@@ -50,37 +54,54 @@ export function isRemote(baseUrl: string): boolean {
 }
 
 const KEY = 'notetoo.ai.v1';
+const onServer = desktop?.mode === 'server';
+
+function parse(v: Partial<AiSettings> | null): AiSettings | null {
+  if (!v || typeof v !== 'object') return null;
+  const base = defaultSettings(v.provider === 'openai' ? 'custom' : 'ollama');
+  return {
+    provider: v.provider === 'openai' ? 'openai' : 'ollama',
+    baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : base.baseUrl,
+    apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+    textModel: typeof v.textModel === 'string' ? v.textModel : '',
+    visionModel: typeof v.visionModel === 'string' ? v.visionModel : '',
+    contextTokens: typeof v.contextTokens === 'number' && v.contextTokens >= 2048 ? v.contextTokens : base.contextTokens,
+  };
+}
 
 function read(): AiSettings | null {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return null;
-    const v = JSON.parse(raw) as Partial<AiSettings>;
-    const base = defaultSettings(v.provider === 'openai' ? 'custom' : 'ollama');
-    return {
-      provider: v.provider === 'openai' ? 'openai' : 'ollama',
-      baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : base.baseUrl,
-      apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
-      textModel: typeof v.textModel === 'string' ? v.textModel : '',
-      visionModel: typeof v.visionModel === 'string' ? v.visionModel : '',
-      contextTokens: typeof v.contextTokens === 'number' && v.contextTokens >= 2048 ? v.contextTokens : base.contextTokens,
-    };
+    return raw ? parse(JSON.parse(raw) as Partial<AiSettings>) : null;
   } catch {
     return null; // blocked or cleared storage just means "not set up"
   }
 }
 
-let current = read();
+let current = onServer ? null : read();
 const listeners = new Set<() => void>();
+
+if (onServer) {
+  void serverCall<Partial<AiSettings> | null>('ai:get-settings')
+    .then((v) => {
+      current ??= parse(v);
+      listeners.forEach((l) => l());
+    })
+    .catch(() => {}); // the connection banner says why; the panel shows "Not set up" meanwhile
+}
 
 export function getAiSettings(): AiSettings | null {
   return current;
 }
 
-/** Saves for this browser only. Returns false when the browser refuses storage (kept for this session). */
-export function saveAiSettings(s: AiSettings): boolean {
+/**
+ * Saves for this browser only (or on the PC, connected to the NoteTOO server). Resolves false when
+ * they could not be stored; they are still used until NoteTOO is closed.
+ */
+export async function saveAiSettings(s: AiSettings): Promise<boolean> {
   current = { ...s, baseUrl: s.baseUrl.trim().replace(/\/+$/, ''), textModel: s.textModel.trim(), visionModel: s.visionModel.trim() };
   listeners.forEach((l) => l());
+  if (onServer) return serverCall('ai:set-settings', current).then(() => true, () => false);
   try {
     localStorage.setItem(KEY, JSON.stringify(current));
     return true;

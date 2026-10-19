@@ -3,6 +3,9 @@ import { desktop } from '../desktop/bridge';
 import { useApp } from '../state/AppContext';
 import { Spinner } from './common';
 
+/** Connected to the NoteTOO server: the folders are the ones it shares from the PC. */
+const server = desktop?.mode === 'server';
+
 export function StartScreen() {
   const app = useApp();
 
@@ -40,12 +43,20 @@ export function StartScreen() {
       <div className="start-card">
         <h1 className="start-title">NoteTOO</h1>
         <p className="muted">Organize, preview and annotate your school files.</p>
-        <button className="btn primary big" onClick={app.openFolder} autoFocus>
-          <FolderOpen size={20} /> {desktop ? 'Open a folder…' : 'Open my school folder'}
-        </button>
+        {!server && (
+          <button className="btn primary big" onClick={app.openFolder} autoFocus>
+            <FolderOpen size={20} /> {desktop ? 'Open a folder…' : 'Open my school folder'}
+          </button>
+        )}
+        {server && app.recent.length === 0 && (
+          <p className="start-note">
+            Your PC does not share any folder yet. On the PC, run <code>NoteTOO-Server.cmd --add-folder "D:\School"</code>,
+            then reload this page.
+          </p>
+        )}
         {desktop && app.recent.length > 0 && (
           <section className="recent" aria-labelledby="recent-title">
-            <h2 id="recent-title">Recent folders</h2>
+            <h2 id="recent-title">{server ? 'Folders on your PC' : 'Recent folders'}</h2>
             <ul>
               {app.recent.map((p) => (
                 <li key={p}>
@@ -56,16 +67,20 @@ export function StartScreen() {
                       <span className="recent-path">{p}</span>
                     </span>
                   </button>
-                  <button className="icon-btn small recent-forget" title="Remove from this list" aria-label={`Remove ${p} from recent folders`} onClick={() => app.forgetRecent(p)}>
-                    <X size={14} />
-                  </button>
+                  {!server && (
+                    <button className="icon-btn small recent-forget" title="Remove from this list" aria-label={`Remove ${p} from recent folders`} onClick={() => app.forgetRecent(p)}>
+                      <X size={14} />
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
           </section>
         )}
         <p className="start-note">
-          {desktop
+          {server
+            ? 'NoteTOO runs on your PC: your files, notes and AI stay there, and everything you change is saved there.'
+            : desktop
             ? 'Everything you create (notes, comments, highlights) is saved as files inside that folder, so your drive sync keeps it. NoteTOO reopens it the next time it starts.'
             : 'Everything you create (notes, comments, highlights) is saved as files inside that folder, so your drive sync keeps it. Nothing is stored in the browser, which is why NoteTOO asks for the folder each time it starts.'}
         </p>
@@ -88,7 +103,9 @@ export function ReconnectOverlay() {
         <ShieldAlert size={36} className="warn" />
         <h2 id="reconnect-title">Access to “{app.fs?.rootName}” was lost</h2>
         <p>
-          {desktop
+          {server
+            ? 'NoteTOO on your PC can no longer reach this folder: it was moved or renamed, it is on a drive that was disconnected, or it is no longer shared. Unsaved changes are kept until you reconnect.'
+            : desktop
             ? 'The folder is no longer available: it was moved or renamed, or it is on a drive that was disconnected. Put it back and reconnect, or choose another folder; unsaved changes are kept until then.'
             : 'The browser no longer allows NoteTOO to read or write this folder (permission revoked, or the folder was moved). Reconnect to continue; unsaved changes are kept until then.'}
         </p>
@@ -96,7 +113,7 @@ export function ReconnectOverlay() {
           <button className="btn primary" onClick={app.reconnect} autoFocus>
             Reconnect to folder
           </button>
-          <button className="btn" onClick={app.openFolder}>
+          <button className="btn" onClick={server ? app.closeFolder : app.openFolder}>
             Choose another folder
           </button>
         </div>

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "rootDir": "..",
+    "outDir": "../out"
+  },
+  "include": ["*.mts", "../electron/disk.mts", "../electron/receive.mts", "../src/desktop/bridge.ts", "../src/fs/paths.ts"],
+  "exclude": ["*.test.ts"]
+}

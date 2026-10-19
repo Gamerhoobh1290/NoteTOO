@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Eye, EyeOff, KeyRound, ShieldAlert, Smartphone } from 'lucide-react';
 import qrcode from 'qrcode-generator';
-import { desktop, type ReceivedFile, type ReceiveState } from '../desktop/bridge';
+import { windowsApp as desktop, type ReceivedFile, type ReceiveState } from '../desktop/bridge';
 import { baseName, parentPath } from '../fs/paths';
 import { errorMessage, toast } from '../lib/ui';
 import { useApp } from '../state/AppContext';

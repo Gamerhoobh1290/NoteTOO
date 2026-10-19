@@ -2,8 +2,13 @@
 //  - Ollama's native API (/api/chat): lets us set the context size (num_ctx) and a JSON schema.
 //  - OpenAI-compatible APIs (/chat/completions): OpenRouter, LM Studio, Groq, etc.
 // Both stream, and both stop on `signal`.
+// In a browser connected to the NoteTOO server, requests go through the server (server/app.mts),
+// so the AI server set up there (e.g. Ollama on localhost) is the one on the PC that runs NoteTOO.
 
+import { desktop } from '../desktop/bridge';
 import type { AiSettings } from './settings';
+
+const viaServer = desktop?.mode === 'server';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -51,7 +56,7 @@ function modelFor(s: AiSettings, vision?: boolean): string {
 
 function unreachable(s: AiSettings): AiError {
   return s.provider === 'ollama'
-    ? new AiError(`Can't reach Ollama at ${s.baseUrl}. Is it running? Start the Ollama app, then try again.`, 'unreachable')
+    ? new AiError(`Can't reach Ollama at ${s.baseUrl}${viaServer ? ' on your PC' : ''}. Is it running? Start the Ollama app, then try again.`, 'unreachable')
     : new AiError(`Can't reach ${s.baseUrl}. Check your internet connection and the server URL in AI settings.`, 'unreachable');
 }
 
@@ -79,10 +84,25 @@ async function httpError(s: AiSettings, res: Response, model: string): Promise<A
   return new AiError(`The AI server answered with an error (${res.status})${detail ? `: ${detail}` : '.'}`);
 }
 
-async function post(s: AiSettings, url: string, body: unknown, signal?: AbortSignal, model = ''): Promise<Response> {
+/** fetch() of `path` on the AI server, directly or through the NoteTOO server. */
+async function aiFetch(s: AiSettings, path: string, init: RequestInit): Promise<Response> {
+  if (!viaServer) return fetch(`${s.baseUrl}${path}`, init);
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await fetch(`/api/ai${path}`, { ...init, headers: { ...(init.headers as Record<string, string>), 'x-notetoo-ai-base': s.baseUrl } });
+  } catch (e) {
+    if ((e as DOMException).name === 'AbortError') throw e;
+    throw new AiError("Can't reach NoteTOO on your PC. Check that the PC is on and the NoteTOO server is running.", 'unreachable');
+  }
+  if (res.status === 502 && res.headers.get('x-notetoo-ai-unreachable')) throw unreachable(s);
+  if (res.status === 401) throw new AiError('You were signed out of NoteTOO. Sign in again, then try again.', 'auth');
+  return res;
+}
+
+async function post(s: AiSettings, path: string, body: unknown, signal?: AbortSignal, model = ''): Promise<Response> {
+  let res: Response;
+  try {
+    res = await aiFetch(s, path, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -93,7 +113,7 @@ async function post(s: AiSettings, url: string, body: unknown, signal?: AbortSig
       signal,
     });
   } catch (e) {
-    if ((e as DOMException).name === 'AbortError') throw e;
+    if ((e as DOMException).name === 'AbortError' || e instanceof AiError) throw e;
     throw unreachable(s);
   }
   if (!res.ok) throw await httpError(s, res, model);
@@ -123,7 +143,7 @@ const base64Of = (dataUrl: string) => dataUrl.slice(dataUrl.indexOf(',') + 1);
 async function chatOllama(s: AiSettings, o: ChatOptions, model: string, think: boolean): Promise<string> {
   const res = await post(
     s,
-    `${s.baseUrl}/api/chat`,
+    '/api/chat',
     {
       model,
       stream: true,
@@ -156,7 +176,7 @@ async function chatOllama(s: AiSettings, o: ChatOptions, model: string, think: b
 async function chatOpenAi(s: AiSettings, o: ChatOptions, model: string, jsonMode: boolean): Promise<string> {
   const res = await post(
     s,
-    `${s.baseUrl}/chat/completions`,
+    '/chat/completions',
     {
       model,
       stream: true,
@@ -214,12 +234,12 @@ export async function chat(s: AiSettings, o: ChatOptions): Promise<string> {
 
 /** Models the server offers (installed ones for Ollama). */
 export async function listModels(s: AiSettings, signal?: AbortSignal): Promise<ModelInfo[]> {
-  const url = s.provider === 'ollama' ? `${s.baseUrl}/api/tags` : `${s.baseUrl}/models`;
+  const path = s.provider === 'ollama' ? '/api/tags' : '/models';
   let res: Response;
   try {
-    res = await fetch(url, { headers: s.apiKey ? { Authorization: `Bearer ${s.apiKey}` } : {}, signal });
+    res = await aiFetch(s, path, { headers: s.apiKey ? { Authorization: `Bearer ${s.apiKey}` } : {}, signal });
   } catch (e) {
-    if ((e as DOMException).name === 'AbortError') throw e;
+    if ((e as DOMException).name === 'AbortError' || e instanceof AiError) throw e;
     throw unreachable(s);
   }
   if (!res.ok) throw await httpError(s, res, '');

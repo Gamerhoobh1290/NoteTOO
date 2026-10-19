@@ -261,7 +261,7 @@ function EmptyHint({ depth }: { depth: number }) {
 
 /** Desktop app: hand the item to Windows (its default program, or File Explorer). */
 function windowsItems(app: ReturnType<typeof useApp>, entry: Pick<Entry, 'path' | 'kind'>): MenuItem[] {
-  if (!app.fs?.desktop) return [];
+  if (!app.fs?.desktop?.windows) return [];
   return entry.kind === 'file'
     ? [
         { label: 'Open with default app', icon: ExternalLink, onSelect: () => app.openInWindows(entry.path) },

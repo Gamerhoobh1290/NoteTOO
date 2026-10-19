@@ -6,17 +6,12 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DesktopBridge } from '../src/desktop/bridge';
 
-const trashed: string[] = [];
-vi.mock('electron', () => ({
-  shell: {
-    trashItem: async (p: string) => {
-      trashed.push(p);
-      rmSync(p, { recursive: true });
-    },
-  },
-}));
-
 const disk = await import('./disk.mts');
+const trashed: string[] = [];
+disk.setTrash(async (p: string) => {
+  trashed.push(p);
+  rmSync(p, { recursive: true });
+});
 const { ConflictError, createFs } = await import('../src/fs/fsService');
 const { createNativeRoot } = await import('../src/fs/nativeFs');
 

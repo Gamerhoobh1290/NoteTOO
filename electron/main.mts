@@ -430,8 +430,14 @@ function registerIpc() {
   handle('disk:move', disk.move);
   handle('disk:same-entry', disk.sameEntry);
 
-  handle('shell:open-path', disk.openPath);
-  handle('shell:show-in-folder', disk.showInFolder);
+  handle('shell:open-path', async (root: string, p: string) => {
+    try {
+      return (await shell.openPath(disk.resolveIn(root, p))) || null;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  });
+  handle('shell:show-in-folder', (root: string, p: string) => shell.showItemInFolder(disk.resolveIn(root, p)));
 
   handle('receive:start', (root: string) => startReceiving(String(root)));
   handle('receive:stop', async () => {
@@ -529,6 +535,7 @@ if (!app.requestSingleInstanceLock()) {
 
   void app.whenReady().then(() => {
     settings = loadSettings();
+    disk.setTrash((p) => shell.trashItem(p));
     nativeTheme.themeSource = settings.theme;
     nativeTheme.on('updated', applyThemeToWindow);
     pendingFolder = folderFromArgs(process.argv);

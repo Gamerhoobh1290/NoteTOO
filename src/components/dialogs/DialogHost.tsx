@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useDialog, type DialogRequest } from '../../lib/ui';
-import { desktop } from '../../desktop/bridge';
+import { windowsApp } from '../../desktop/bridge';
 
 export const SHORTCUTS: [string, string][] = [
   ['Ctrl+K or /', 'Search files'],
@@ -14,7 +14,7 @@ export const SHORTCUTS: [string, string][] = [
   ['Ctrl+F', 'Search inside the open PDF'],
   ['V / H / C', 'Select, Highlight area, Comment pin tools (PDF, image)'],
   ['?', 'Show this list'],
-  ...(desktop
+  ...(windowsApp
     ? ([
         ['Ctrl+O', 'Open another folder'],
         ['F5', 'Re-scan the folder'],

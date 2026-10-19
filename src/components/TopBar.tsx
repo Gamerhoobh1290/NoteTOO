@@ -3,7 +3,7 @@ import {
   ChevronDown, Folder, FolderOpen, FolderSearch, Keyboard, LogOut, Monitor, Moon, NotebookPen, PanelLeft, PanelRight,
   RefreshCw, Search, Sparkles, Sun, X,
 } from 'lucide-react';
-import { desktop, type ThemeSource } from '../desktop/bridge';
+import { desktop, windowsApp, type ThemeSource } from '../desktop/bridge';
 import { openMenu, shortcutsDialog, toast, type MenuItem } from '../lib/ui';
 import { useApp } from '../state/AppContext';
 import { cls } from './common';
@@ -19,7 +19,7 @@ const THEMES: { id: ThemeSource; label: string; icon: typeof Sun }[] = [
 function ThemeButton() {
   const [theme, setTheme] = useState<ThemeSource>('system');
   useEffect(() => {
-    void desktop?.getTheme().then(setTheme);
+    void windowsApp?.getTheme().then(setTheme);
   }, []);
   const i = THEMES.findIndex((t) => t.id === theme);
   const cur = THEMES[i];
@@ -31,7 +31,7 @@ function ThemeButton() {
       aria-label={`Theme: ${cur.label}. Switch to ${next.label}`}
       onClick={() => {
         setTheme(next.id);
-        void desktop?.setTheme(next.id);
+        void windowsApp?.setTheme(next.id);
       }}
     >
       <cur.icon size={17} />
@@ -39,13 +39,20 @@ function ThemeButton() {
   );
 }
 
-/** Desktop app: the folder name opens a menu to switch folders, show it in Explorer or close it. */
+/**
+ * Desktop app: the folder name opens a menu to switch folders, show it in Explorer or close it.
+ * Connected to the NoteTOO server: switch between the folders it shares, or close.
+ */
 function folderMenu(app: ReturnType<typeof useApp>, x: number, y: number) {
   const others = app.recent.slice(1, 7); // the first one is the open folder
   const items: MenuItem[] = [
     ...others.map((p) => ({ label: others.filter((o) => baseOf(o) === baseOf(p)).length > 1 ? p : baseOf(p), icon: Folder, onSelect: () => app.openRecent(p) })),
-    { label: 'Open another folder…  Ctrl+O', icon: FolderOpen, onSelect: app.openFolder },
-    { label: 'Open in File Explorer', icon: FolderSearch, onSelect: () => app.openInWindows('') },
+    ...(windowsApp
+      ? [
+          { label: 'Open another folder…  Ctrl+O', icon: FolderOpen, onSelect: app.openFolder },
+          { label: 'Open in File Explorer', icon: FolderSearch, onSelect: () => app.openInWindows('') },
+        ]
+      : []),
     { label: 'Close folder', icon: LogOut, onSelect: app.closeFolder },
   ];
   openMenu(x, y, items);
@@ -72,7 +79,7 @@ export function TopBar() {
       {desktop ? (
         <button
           className="folder-name folder-switch"
-          title="Switch folder, open it in File Explorer, or close it"
+          title={windowsApp ? 'Switch folder, open it in File Explorer, or close it' : 'Switch folder or close it'}
           aria-haspopup="menu"
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
@@ -160,7 +167,7 @@ export function TopBar() {
         <button className="icon-btn" data-tour="shortcuts" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => shortcutsDialog()}>
           <Keyboard size={18} />
         </button>
-        {desktop ? (
+        {windowsApp ? (
           <ThemeButton />
         ) : (
           <button className="icon-btn" title="Close folder" aria-label="Close folder" onClick={app.closeFolder}>

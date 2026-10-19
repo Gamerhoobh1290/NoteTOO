@@ -28,7 +28,7 @@ export default function UnsupportedPreview({ file, path, rootName, reason }: { f
             {rootName}/{path}
           </dd>
         </dl>
-        {app.fs?.desktop ? (
+        {app.fs?.desktop?.windows ? (
           <div className="row-actions">
             <button className="btn primary" onClick={() => app.openInWindows(path)} autoFocus>
               <ExternalLink size={16} /> Open with default app

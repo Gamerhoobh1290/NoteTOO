@@ -371,9 +371,11 @@ export function createFs(root: FileSystemDirectoryHandle, onAccessLost?: (e: unk
 
   return {
     rootName: root.name,
-    /** Desktop app only: Windows integration for files of this folder. */
+    /** Desktop app, or a browser connected to the NoteTOO server: files read from the PC's disk. */
     desktop: nativeId && desktop
       ? {
+          /** Windows integration (default app, File Explorer): only in the desktop app, on the PC itself. */
+          windows: desktop.mode === 'app',
           /** The main process's id for this folder (Receive from phone writes into it). */
           rootId: nativeId,
           /** Streams from disk (audio/video) instead of reading the whole file. */

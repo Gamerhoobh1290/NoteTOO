@@ -3053,3 +3053,25 @@ html.desktop .start-card {
     grid-template-columns: 1fr;
   }
 }
+
+/* NoteTOO server (browser on another computer): the PC can't be reached, or the session ended. */
+.connection-banner {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 250;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--danger);
+  color: #fff;
+  box-shadow: var(--shadow);
+}
+.connection-banner a {
+  color: inherit;
+  font-weight: 600;
+}

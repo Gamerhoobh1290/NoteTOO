@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createFs } from './fsService';
 import { createMemoryRoot, putFile } from './memoryFs';
-import { emptySidecar, loadSidecar, parseSidecar, serializeSidecar, SidecarError, type Sidecar } from './sidecar';
+import { emptySidecar, loadSidecar, newId, parseSidecar, serializeSidecar, SidecarError, type Sidecar } from './sidecar';
 
 const sample: Sidecar = {
   version: 1,
@@ -114,5 +114,19 @@ describe('loadSidecar', () => {
     // A second breakage does not overwrite the first backup.
     await putFile(root, '.noteTOO/Maths/a.pdf.annotations.json', 'nope');
     expect((await loadSidecar(fs, 'Maths/a.pdf')).backup).toBe('.noteTOO/Maths/a.pdf.annotations.broken (1).json');
+  });
+});
+
+describe('newId', () => {
+  it('works without crypto.randomUUID (a page from the NoteTOO server over plain http on the network)', () => {
+    const real = globalThis.crypto;
+    vi.stubGlobal('crypto', { getRandomValues: (a: Uint8Array<ArrayBuffer>) => real.getRandomValues(a) });
+    try {
+      const ids = new Set(Array.from({ length: 50 }, newId));
+      expect(ids.size).toBe(50);
+      for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

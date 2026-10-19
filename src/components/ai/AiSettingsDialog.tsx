@@ -5,6 +5,10 @@ import { PRESETS, defaultSettings, getAiSettings, isRemote, presetOf, saveAiSett
 import { errorMessage, toast } from '../../lib/ui';
 import { useAi } from '../../state/AiContext';
 import { cls } from '../common';
+import { desktop } from '../../desktop/bridge';
+
+/** Connected to the NoteTOO server: the settings and the AI are on the PC. */
+const onServer = desktop?.mode === 'server';
 
 export function AiSettingsDialog() {
   const ai = useAi();
@@ -101,14 +105,27 @@ function SettingsForm({ close }: { close: () => void }) {
   const save = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ready) return;
-    if (!saveAiSettings(s)) toast('This browser refused to store the settings: they will be forgotten when you close NoteTOO.', 'error');
+    void saveAiSettings(s).then((ok) => {
+      if (!ok) {
+        toast(
+          onServer
+            ? 'The settings could not be saved on your PC: they will be forgotten when you reload NoteTOO.'
+            : 'This browser refused to store the settings: they will be forgotten when you close NoteTOO.',
+          'error',
+        );
+      }
+    });
     close();
   };
 
   return (
     <form className="dialog-body" onSubmit={save}>
       <h2>AI settings</h2>
-      <p className="muted hint">Kept in this browser only (each PC has its own setup). Never written to your school folder.</p>
+      <p className="muted hint">
+        {onServer
+          ? 'Kept on your PC, which runs the AI; every browser connected to it uses this setup. Never written to your school folder.'
+          : 'Kept in this browser only (each PC has its own setup). Never written to your school folder.'}
+      </p>
 
       <div className="seg ai-presets" role="radiogroup" aria-label="AI provider">
         {(Object.keys(PRESETS) as PresetId[]).map((id) => (
@@ -120,7 +137,7 @@ function SettingsForm({ close }: { close: () => void }) {
 
       {preset === 'ollama' && (
         <p className="muted hint">
-          Free and private: everything stays on this PC. Install Ollama from ollama.com, then download a model, e.g.{' '}
+          Free and private: everything stays on {onServer ? 'your PC (the one running NoteTOO)' : 'this PC'}. Install Ollama from ollama.com, then download a model, e.g.{' '}
           <code>ollama pull qwen3.5:9b</code> (reads text and images).
         </p>
       )}

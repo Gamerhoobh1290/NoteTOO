@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "sample": "node scripts/make-sample.mjs",
+    "server:compile": "tsc -p server",
+    "server": "npm run build -- --logLevel error && npm run server:compile && node out/server/main.mjs",
     "desktop:compile": "tsc -p electron",
     "desktop:dev": "npm run desktop:compile && node scripts/desktop-dev.mjs",
     "desktop": "npm run build && npm run desktop:compile && electron .",

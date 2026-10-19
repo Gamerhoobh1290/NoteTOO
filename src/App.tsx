@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { FolderInput, Trash2, X } from 'lucide-react';
 import { installDragTracking, useDrag } from './lib/dnd';
 import { NARROW, isTypingTarget, shortcutsDialog, toast } from './lib/ui';
-import { desktop } from './desktop/bridge';
+import { windowsApp } from './desktop/bridge';
 import { SUBJECT_NOTES, joinPath } from './fs/paths';
 import { AppProvider, useApp, type View } from './state/AppContext';
 import { AiProvider } from './state/AiContext';
@@ -10,6 +10,7 @@ import { AiPanel } from './components/ai/AiPanel';
 import { AiSettingsDialog } from './components/ai/AiSettingsDialog';
 import { OrganizeView } from './components/ai/OrganizeView';
 import { ErrorBoundary, MenuHost, Toasts, cls } from './components/common';
+import { ConnectionBanner } from './components/ConnectionBanner';
 import { DialogHost } from './components/dialogs/DialogHost';
 import { FileView } from './components/FileView';
 import { NoteEditor } from './components/notes/NoteEditor';
@@ -28,6 +29,7 @@ export default function App() {
       </AiProvider>
       <DialogHost />
       <MenuHost />
+      <ConnectionBanner />
       <Toasts />
     </AppProvider>
   );
@@ -45,12 +47,12 @@ function useGlobalShortcuts() {
       if (document.querySelector('dialog[open]')) return;
       const typing = isTypingTarget(e.target);
       // Desktop app: the usual Windows commands.
-      if (desktop && e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
+      if (windowsApp && e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
         e.preventDefault();
         void openFolder();
         return;
       }
-      if (desktop && e.key === 'F5' && phase === 'open') {
+      if (windowsApp && e.key === 'F5' && phase === 'open') {
         e.preventDefault();
         void refresh().then(() => toast('Folder re-scanned.'));
         return;

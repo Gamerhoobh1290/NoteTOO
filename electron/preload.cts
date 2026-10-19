@@ -8,6 +8,7 @@ const FILE_SCHEME = 'notetoo-file'; // = disk.FILE_SCHEME (a sandboxed preload c
 const invoke = ipcRenderer.invoke.bind(ipcRenderer);
 
 const bridge: DesktopBridge = {
+  mode: 'app',
   pickFolder: () => invoke('folder:pick'),
   openRecent: (p) => invoke('folder:open-recent', p),
   lastFolder: () => invoke('folder:last'),

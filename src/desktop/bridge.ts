@@ -1,8 +1,12 @@
-// Contract between the Electron preload script (electron/preload.cts) and the renderer.
+// Contract between the Electron preload script (electron/preload.cts) and the renderer. The same
+// contract reaches the NoteTOO server (server/) over HTTP when the page is served by it
+// (serverBridge.ts): the files then stay on the PC running the server.
 // In a plain browser `desktop` is null and the app uses the File System Access API instead.
 // Disk calls name the opened folder by its id (so edits still saving after a switch go to the
 // folder they belong to) and a '/'-separated path inside it; the main process resolves them and
 // refuses anything outside that folder.
+
+import { connectServerBridge } from './serverBridge.js';
 
 export interface RootInfo {
   /** session id of this opened folder, passed to every disk call */
@@ -58,6 +62,13 @@ export interface ReceiveState {
 }
 
 export interface DesktopBridge {
+  /**
+   * 'app': the Windows desktop app, on the PC that has the files.
+   * 'server': a browser (e.g. on a laptop) connected to the NoteTOO server on that PC. There is no
+   * Windows integration then (folder dialog, File Explorer, theme, Receive from phone).
+   */
+  readonly mode: 'app' | 'server';
+
   // ----- the opened folder -----
   /** Native folder dialog; opens the chosen folder (null when cancelled). */
   pickFolder(): Promise<RootInfo | null>;
@@ -124,4 +135,7 @@ declare global {
   }
 }
 
-export const desktop: DesktopBridge | null = (typeof window !== 'undefined' && window.notetoo) || null;
+export const desktop: DesktopBridge | null = (typeof window !== 'undefined' && (window.notetoo ?? connectServerBridge())) || null;
+
+/** The Windows desktop app only: its own window and the Windows integration. */
+export const windowsApp: DesktopBridge | null = desktop?.mode === 'app' ? desktop : null;
