@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
-import { Wand2 } from 'lucide-react';
+import { Download, Wand2 } from 'lucide-react';
+import { canDownload, downloadFile } from '../lib/download';
 import { isNotFound } from '../fs/fsService';
 import { baseName, sidecarPath, splitPath } from '../fs/paths';
 import { AI_COLOR, loadSidecar, newId, serializeSidecar, type Annotation, type Color, type Sidecar } from '../fs/sidecar';
@@ -196,6 +197,16 @@ export function FileView({ path }: { path: string }) {
             </div>
           </div>
           {!app.panels.annotations && <SaveIndicator doc={doc} />}
+          {canDownload && app.fs?.desktop && (
+            <button
+              className="icon-btn small fileview-download"
+              aria-label="Download a copy"
+              title="Download a copy to this computer (the file stays on your PC)"
+              onClick={() => downloadFile(app.fs!.desktop!.rootId, path)}
+            >
+              <Download size={16} />
+            </button>
+          )}
         </div>
         <div className="fileview-body" ref={bodyRef}>
           {error ? (

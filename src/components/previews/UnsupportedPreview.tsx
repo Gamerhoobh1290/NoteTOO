@@ -1,4 +1,5 @@
-import { ExternalLink, FileQuestion, FolderSearch } from 'lucide-react';
+import { Download, ExternalLink, FileQuestion, FolderSearch } from 'lucide-react';
+import { canDownload, downloadFile } from '../../lib/download';
 import { extName } from '../../fs/paths';
 import { formatDate, formatSize } from '../../lib/fileKinds';
 import { useApp } from '../../state/AppContext';
@@ -37,6 +38,18 @@ export default function UnsupportedPreview({ file, path, rootName, reason }: { f
               <FolderSearch size={16} /> Show in File Explorer
             </button>
           </div>
+        ) : canDownload && app.fs?.desktop ? (
+          <>
+            <p className="hint">This file stays on your PC. To open it in a program on this computer, download a copy:</p>
+            <div className="row-actions">
+              <button className="btn primary" onClick={() => downloadFile(app.fs!.desktop!.rootId, path)} autoFocus>
+                <Download size={16} /> Download a copy
+              </button>
+              <button className="btn" onClick={openInTab}>
+                <ExternalLink size={16} /> Open in a new browser tab
+              </button>
+            </div>
+          </>
         ) : (
           <>
             <p className="hint">

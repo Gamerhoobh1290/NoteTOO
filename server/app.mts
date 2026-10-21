@@ -23,6 +23,7 @@ import { samePath, type ConfigStore } from './config.mjs';
 import { isLinkLocal, noLinkLocal } from './net.mjs';
 import { AgentUnavailable, createAgentService } from './agent/service.mjs';
 import { undoRun, type AgentEvent } from './agent/runner.mjs';
+import { DownloadError, attachment, createDownloads } from './download.mjs';
 
 export { isLinkLocal };
 
@@ -237,6 +238,7 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
   };
 
   const agent = createAgentService(store);
+  const downloads = createDownloads();
 
   /** Unfinished writes and when they were last used (see WRITE_IDLE_MS). */
   const writes = new Map<string, number>();
@@ -339,8 +341,8 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
     sendJson(res, 200, { ok: true });
   }
 
-  /** Streams a file of a shared folder, with range requests (audio/video seeking). */
-  async function serveFile(req: http.IncomingMessage, res: http.ServerResponse, rest: string) {
+  /** Streams a file of a shared folder, with range requests (audio/video seeking); `download` saves a copy. */
+  async function serveFile(req: http.IncomingMessage, res: http.ServerResponse, rest: string, download = false) {
     const slash = rest.indexOf('/');
     const id = slash < 0 ? rest : rest.slice(0, slash);
     requireRoot(id);
@@ -350,6 +352,15 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
     r.headers.forEach((v, k) => {
       if (!k.startsWith('access-control-')) headers[k] = v;
     });
+    if (download && r.status === 200) {
+      let name = '';
+      try {
+        name = decodeURIComponent(rest.slice(rest.lastIndexOf('/') + 1));
+      } catch {
+        /* keep the browser's default name */
+      }
+      if (name) headers['content-disposition'] = attachment(name);
+    }
     // A file from the folder must never run as a page of this site (SVG, HTML served as text…).
     res.writeHead(r.status, { ...SECURITY_HEADERS, ...headers, 'content-security-policy': "sandbox; default-src 'none'" });
     if (req.method === 'HEAD' || !r.body) {
@@ -577,7 +588,21 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
       writes.set(id, Date.now());
       return sendJson(res, 200, r);
     }
-    if (p.startsWith('/api/file/') && reading) return serveFile(req, res, p.slice('/api/file/'.length));
+    if (p.startsWith('/api/file/') && reading) return serveFile(req, res, p.slice('/api/file/'.length), url.searchParams.has('download'));
+    if (p === '/api/zip/prepare' && method === 'POST') {
+      const b = (await readJson(req)) as { root?: unknown; paths?: unknown; name?: unknown } | null;
+      try {
+        return sendJson(res, 200, await downloads.prepare(b?.root as string, rootPath(b?.root), b?.paths, b?.name));
+      } catch (e) {
+        if (e instanceof DownloadError) throw new HttpError(400, e.message);
+        throw e;
+      }
+    }
+    const zip = /^\/api\/zip\/([0-9a-f-]{36})$/.exec(p);
+    if (zip && reading) {
+      if (!downloads.send(zip[1], res, SECURITY_HEADERS)) send(res, 404, 'This download has expired. Start it again from NoteTOO.', { 'content-type': 'text/plain; charset=utf-8' });
+      return;
+    }
     if (p === '/api/agent/runs' && method === 'POST') return startRun(req, res);
     const run = /^\/api\/agent\/runs\/([0-9a-f-]{36})\/(events|stop|approve|undo)$/.exec(p);
     if (run) return agentRun(req, res, run[1], run[2], url);

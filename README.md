@@ -207,6 +207,12 @@ the folder on the PC), rename/move/delete (delete moves to the **PC's** Recycle 
   your edits; sign in there, then **Retry**.
 - **Edits on the PC and the laptop at the same time** are handled like sync conflicts: NoteTOO notices the change and
   asks which version to keep.
+- **Download a copy to the laptop:** the download button at the top of an open file, **Download a copy** in a file's
+  `…` menu (and on the "no preview" card), **Download as .zip** for a folder or subject, and **Download** in the selection
+  bar for several files (one .zip). The PC prepares and streams the zip (up to 3.5 GB and 20,000 files at a time); your
+  notes come along, NoteTOO's internal `.noteTOO` folder and hidden files don't. Downloading only copies: the files stay
+  in your school folder on the PC, untouched. Changes you make to a downloaded copy stay on the laptop; to put a file back,
+  drag it into NoteTOO.
 - Not available from the laptop: opening files in Windows programs or File Explorer, the theme button (the browser
   follows the laptop's light/dark setting), and Receive from phone (use the desktop app on the PC for that).
 
@@ -539,6 +545,7 @@ server/agent/            NoteTOO server: the AI agent, run on the PC
   office.mts             .docx/.pptx/.xlsx from Markdown; python.mts: guarded Python scripts
   service.mts            runs and indexes per shared folder; agent.test.ts: end to end with Ollama/OpenAI wire formats
 server/recycle.mts       NoteTOO server: Recycle Bin without Electron; server/login.html is the sign-in page
+server/download.mts      NoteTOO server: downloads (a copy of a file; folders and selections as a streamed .zip)
 NoteTOO-Server.cmd       double-click launcher for the server (installs, builds, starts)
 src/
   fs/fsService.ts        the only module that touches the File System Access API

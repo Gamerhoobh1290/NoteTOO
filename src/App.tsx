@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { FolderInput, Trash2, X } from 'lucide-react';
+import { Download, FolderInput, Trash2, X } from 'lucide-react';
+import { canDownload, downloadZip } from './lib/download';
 import { installDragTracking, useDrag } from './lib/dnd';
 import { NARROW, isTypingTarget, shortcutsDialog, toast } from './lib/ui';
 import { windowsApp } from './desktop/bridge';
@@ -139,6 +140,11 @@ function SelectionBar() {
       <button className="btn small" onClick={() => app.moveEntryPrompt(app.selection)}>
         <FolderInput size={15} /> Move to…
       </button>
+      {canDownload && app.fs?.desktop && (
+        <button className="btn small" title="Save a copy of the selected files on this computer, as one .zip (they stay on your PC)" onClick={() => void downloadZip(app.fs!.desktop!.rootId, app.selection)}>
+          <Download size={15} /> Download
+        </button>
+      )}
       <button className="btn small danger-outline" onClick={() => app.deleteFiles(app.selection)}>
         <Trash2 size={15} /> Delete…
       </button>

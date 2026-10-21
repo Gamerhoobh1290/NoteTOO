@@ -4,6 +4,7 @@ import type { Entry } from '../fs/fsService';
 import { type Section, baseName, classify, parentPath } from '../fs/paths';
 import { formatDate } from '../lib/fileKinds';
 import { errorMessage, openMenu, pickFiles } from '../lib/ui';
+import { downloadItems } from './Sidebar';
 import { sectionKey, sortEntries, useApp } from '../state/AppContext';
 import { sectionsOf, type SectionInfo } from '../state/sections';
 import { entryMenu } from './Sidebar';
@@ -135,6 +136,7 @@ export function SubjectOverview({ subject }: { subject: string }) {
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               openMenu(r.left - 120, r.bottom + 4, [
+                ...downloadItems(app, [subject], 'dir').map((i) => ({ ...i, label: 'Download subject (.zip)' })),
                 { label: 'Rename subject…', icon: Pencil, onSelect: () => app.renameEntry({ path: subject, kind: 'dir' }) },
                 { label: 'Delete subject…', icon: Trash2, danger: true, onSelect: () => app.deleteEntry({ path: subject, kind: 'dir' }) },
               ]);
