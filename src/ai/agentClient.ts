@@ -156,3 +156,6 @@ export interface AgentStatus {
 export const getAgentSettings = () => serverCall<AgentSettings>('agent:get-settings');
 export const setAgentSettings = (s: AgentSettings) => serverCall<AgentSettings>('agent:set-settings', s);
 export const getAgentStatus = (root: string) => serverCall<AgentStatus>('agent:status', root);
+/** Tests a model from the PC the way the agent calls it, with the settings in the form. */
+export const checkAgentModel = (settings: unknown, model: ModelChoice) =>
+  serverCall<{ ok: boolean; message: string; reply?: string }>('agent:check-model', { settings, model });

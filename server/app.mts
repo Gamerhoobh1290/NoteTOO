@@ -20,7 +20,7 @@ import * as disk from '../electron/disk.mjs';
 import { Lockout, keyMatches } from '../electron/receive.mjs';
 import type { RootInfo } from '../src/desktop/bridge.js';
 import { samePath, type ConfigStore } from './config.mjs';
-import { isLinkLocal, noLinkLocal } from './net.mjs';
+import { aiCertificates, describeNetError, isLinkLocal, noLinkLocal } from './net.mjs';
 import { AgentUnavailable, createAgentService } from './agent/service.mjs';
 import { undoRun, type AgentEvent } from './agent/runner.mjs';
 import { DownloadError, attachment, createDownloads } from './download.mjs';
@@ -294,6 +294,10 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
     'agent:get-settings': () => agent.settings(),
     'agent:set-settings': (s) => agent.setSettings(s),
     'agent:status': (id) => agent.status(id as string, rootPath(id)),
+    'agent:check-model': (arg) => {
+      const a = (arg && typeof arg === 'object' ? arg : {}) as { settings?: unknown; model?: unknown };
+      return agent.checkModel(a.settings, a.model === 'second' ? 'second' : 'main');
+    },
 
     'ai:get-settings': () => store.get().ai,
     'ai:set-settings': (s) => {
@@ -401,7 +405,8 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
     if (req.headers['content-length']) headers['content-length'] = String(req.headers['content-length']);
     if (Number(headers['content-length'] ?? 0) > MAX_AI_BODY) throw new HttpError(413, 'Request too large.');
 
-    const up = (target.protocol === 'https:' ? https : http).request(target, { method: req.method, headers, lookup: noLinkLocal }, (upRes) => {
+    const ca = target.protocol === 'https:' ? aiCertificates() : undefined;
+    const up = (target.protocol === 'https:' ? https : http).request(target, { method: req.method, headers, lookup: noLinkLocal, ...(ca ? { ca } : {}) }, (upRes) => {
       res.writeHead(upRes.statusCode ?? 502, {
         ...SECURITY_HEADERS,
         'content-type': upRes.headers['content-type'] ?? 'application/octet-stream',
@@ -413,8 +418,9 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
       upRes.pipe(res);
       upRes.on('error', () => res.destroy());
     });
-    up.on('error', () => {
-      if (!res.headersSent) sendJson(res, 502, { error: `Can't reach the AI server at ${base}.` }, { 'x-notetoo-ai-unreachable': '1' });
+    up.on('error', (e: NodeJS.ErrnoException) => {
+      console.error(`[ai] ${req.method} ${target.href} failed: ${e.code ?? ''} ${e.message}`);
+      if (!res.headersSent) sendJson(res, 502, { error: `Can't reach the AI server at ${base}: ${describeNetError(e)}` }, { 'x-notetoo-ai-unreachable': '1' });
       else res.destroy();
     });
     // The browser stopped (Stop button, closed tab, lost connection): stop the model too.

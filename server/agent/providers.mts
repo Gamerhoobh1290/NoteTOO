@@ -10,7 +10,7 @@
 
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { isLinkLocal, noLinkLocal } from '../net.mjs';
+import { aiCertificates, describeNetError, isLinkLocal, noLinkLocal } from '../net.mjs';
 
 export type Provider = 'ollama' | 'openai';
 
@@ -65,6 +65,8 @@ export interface Capabilities {
   note?: string;
   /** prices the provider lists for the model, in US dollars per million tokens */
   pricing?: { inputPerM: number; outputPerM: number };
+  /** the model's details could not be read (not fatal: the chat request decides) */
+  warning?: string;
 }
 
 export interface StepResult {
@@ -125,7 +127,8 @@ function request(s: ModelSettings, sub: string, o: { method?: string; body?: unk
   if (s.provider === 'openai') headers['x-title'] = 'NoteTOO';
   return new Promise((resolve, reject) => {
     if (o.signal?.aborted) return reject(o.signal.reason);
-    const req = (target.protocol === 'https:' ? https : http).request(target, { method: o.method ?? (payload ? 'POST' : 'GET'), headers, lookup: noLinkLocal }, (res) => {
+    const ca = target.protocol === 'https:' ? aiCertificates() : undefined;
+    const req = (target.protocol === 'https:' ? https : http).request(target, { method: o.method ?? (payload ? 'POST' : 'GET'), headers, lookup: noLinkLocal, ...(ca ? { ca } : {}) }, (res) => {
       res.setTimeout(IDLE_MS, () => res.destroy(new ModelError('The AI server stopped answering (no response for 5 minutes).', 'server')));
       async function* lines() {
         let buf = '';
@@ -154,17 +157,19 @@ function request(s: ModelSettings, sub: string, o: { method?: string; body?: unk
     req.on('error', (e: NodeJS.ErrnoException) => {
       if (o.signal?.aborted) return reject(o.signal.reason);
       if (e instanceof ModelError) return reject(e);
-      reject(unreachable(s, e.code));
+      console.error(`[agent] ${o.method ?? (payload ? 'POST' : 'GET')} ${target.href} failed: ${e.code ?? ''} ${e.message}`);
+      reject(unreachable(s, e));
     });
     o.signal?.addEventListener('abort', () => req.destroy(), { once: true });
     req.end(payload);
   });
 }
 
-function unreachable(s: ModelSettings, code?: string): ModelError {
+function unreachable(s: ModelSettings, e?: NodeJS.ErrnoException): ModelError {
+  const why = e ? `: ${describeNetError(e)}` : '.';
   return s.provider === 'ollama'
-    ? new ModelError(`Can't reach Ollama at ${s.baseUrl} on this PC${code ? ` (${code})` : ''}. Is it running? Start the Ollama app, then try again.`, 'unreachable')
-    : new ModelError(`Can't reach ${s.baseUrl}${code ? ` (${code})` : ''}. Check the PC's internet connection and the server URL in AI settings.`, 'unreachable');
+    ? new ModelError(`Can't reach Ollama at ${s.baseUrl} on this PC${why} Is it running? Start the Ollama app, then try again.`, 'unreachable')
+    : new ModelError(`Can't reach ${s.baseUrl} from the PC${why} Check the PC's internet connection and the server URL in AI settings.`, 'unreachable');
 }
 
 /** Maps an HTTP error answer to a clear message (shown to the user as is). */
@@ -289,10 +294,10 @@ function isLocalUrl(baseUrl: string): boolean {
 }
 
 /** What the model can do: native tool calling, and its context window. Cached for 10 minutes. */
-export async function detectCapabilities(s: ModelSettings, signal?: AbortSignal): Promise<Capabilities> {
+export async function detectCapabilities(s: ModelSettings, signal?: AbortSignal, fresh = false): Promise<Capabilities> {
   const key = `${s.provider}|${s.baseUrl}|${s.textModel}|${s.contextTokens}`;
   const hit = capsCache.get(key);
-  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.caps;
+  if (hit && !fresh && Date.now() - hit.at < 10 * 60_000) return hit.caps;
   const caps: Capabilities = { tools: 'native', contextTokens: s.contextTokens, local: s.provider === 'ollama' || isLocalUrl(s.baseUrl) };
   try {
     if (s.provider === 'ollama') {
@@ -327,8 +332,13 @@ export async function detectCapabilities(s: ModelSettings, signal?: AbortSignal)
       } else await res.text();
     }
   } catch (e) {
-    if (signal?.aborted || (e instanceof ModelError && (e.kind === 'model' || e.kind === 'unreachable'))) throw e;
+    if (signal?.aborted || (e instanceof ModelError && e.kind === 'model')) throw e;
+    // Ollama not running: say so at once. Elsewhere the model list is only a nicety (it is several
+    // MB on OpenRouter): go on with defaults; the chat request, which retries, decides.
+    if (e instanceof ModelError && e.kind === 'unreachable' && s.provider === 'ollama') throw e;
+    caps.warning = `The model's details could not be read (${(e as Error).message}); using defaults.`;
     // Unknown: try native tools; a refusal switches to prompted mode then.
+    return caps;
   }
   capsCache.set(key, { at: Date.now(), caps });
   return caps;

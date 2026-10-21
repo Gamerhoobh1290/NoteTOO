@@ -4,7 +4,7 @@
 import * as path from 'node:path';
 import type { ConfigStore } from '../config.mjs';
 import { IndexRegistry, type WorkspaceIndex } from './index.mjs';
-import { modelSettings } from './providers.mjs';
+import { chatStep, detectCapabilities, ModelError, modelSettings, type ModelChoice } from './providers.mjs';
 import { findPython } from './python.mjs';
 import { AgentRun, runAgent, type RunRequest } from './runner.mjs';
 import { parseAgentSettings, type AgentSettings } from './tools.mjs';
@@ -48,6 +48,36 @@ export function createAgentService(store: ConfigStore) {
       void ix.update({ budgetMs: 0 }).catch(() => {});
       const py = findPython(this.settings().python || undefined);
       return { python: py?.version ?? null, index: { ...ix.status(), reading: ix.progress.done < ix.progress.total ? ix.progress : null }, node: process.versions.node };
+    },
+
+    /**
+     * Tests a model from the PC exactly as the agent calls it (model details, then a tiny chat with
+     * tools), with the settings in the form (`raw`, as AI settings stores them) or the saved ones.
+     */
+    async checkModel(raw: unknown, which: ModelChoice) {
+      const src = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : store.get().ai;
+      const model = modelSettings(src, which);
+      if (!model) return { ok: false, message: which === 'second' ? 'No second model is set up.' : 'No model is set up.' };
+      const signal = AbortSignal.timeout(90_000);
+      const started = Date.now();
+      try {
+        const caps = await detectCapabilities(model, signal, true);
+        const res = await chatStep(model, {
+          messages: [{ role: 'user', content: 'Reply with the single word OK.' }],
+          tools: caps.tools === 'native' ? [{ name: 'update_plan', description: 'Not needed for this message.', parameters: { type: 'object', properties: {} } }] : [],
+          mode: 'native',
+          signal,
+        });
+        return {
+          ok: true,
+          message: `The PC reached ${model.textModel} in ${((Date.now() - started) / 1000).toFixed(1)} s (${caps.tools === 'native' ? 'native tool calls' : 'tools through prompts'}, ${Math.round(caps.contextTokens / 1000)}k context).${caps.warning ? ` Note: ${caps.warning}` : ''}`,
+          reply: res.content.slice(0, 200),
+        };
+      } catch (e) {
+        const message = e instanceof ModelError || e instanceof Error ? e.message : String(e);
+        console.error(`[agent] check of ${model.provider} ${model.baseUrl} (${model.textModel}) failed: ${message}`);
+        return { ok: false, message };
+      }
     },
 
     start(req: RunRequest): AgentRun {

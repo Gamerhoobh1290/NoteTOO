@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, CircleAlert, RefreshCw, ShieldAlert } from 'lucide-react';
-import { getAgentSettings, getAgentStatus, setAgentSettings, type AgentSettings, type AgentStatus } from '../../ai/agentClient';
+import { checkAgentModel, getAgentSettings, getAgentStatus, setAgentSettings, type AgentSettings, type AgentStatus, type ModelChoice } from '../../ai/agentClient';
 import { chat, listModels, type ModelInfo } from '../../ai/client';
 import {
   PRESETS, defaultProfile, defaultSettings, getAiSettings, isRemote, presetOf, saveAiSettings, type AiSettings, type ModelProfile, type PresetId,
@@ -235,6 +235,7 @@ function SettingsForm({ close }: { close: () => void }) {
 
       {onServer && agent && <AgentSection value={agent} onChange={setAgent} />}
       {onServer && <SecondModelSection value={s} onChange={(p) => set(p)} />}
+      {onServer && agent && <AgentModelCheck settings={s} />}
 
       {test && (
         <div className={cls('ai-test', test !== 'running' && (test.ok ? 'ok' : 'bad'))} role="status">
@@ -312,6 +313,42 @@ function AgentSection({ value, onChange }: { value: AgentSettings; onChange: (s:
           {status.index.unreadable ? `, ${status.index.unreadable} unreadable (scanned or old formats)` : ''}.
           {oldNode && ` Node.js ${status.node} on the PC is too old to read PDFs: install Node.js 22 LTS or later.`}
         </p>
+      )}
+    </div>
+  );
+}
+
+/** Tests each model from the PC exactly as the agent calls it (with the settings as typed). */
+function AgentModelCheck({ settings }: { settings: AiSettings }) {
+  const [result, setResult] = useState<{ which: ModelChoice; ok: boolean; text: string } | ModelChoice | null>(null);
+  const check = async (which: ModelChoice) => {
+    setResult(which);
+    try {
+      const r = await checkAgentModel(settings, which);
+      setResult({ which, ok: r.ok, text: r.message });
+    } catch (e) {
+      setResult({ which, ok: false, text: errorMessage(e) });
+    }
+  };
+  const running = typeof result === 'string';
+  return (
+    <div className="agent-check">
+      <p className="muted hint">Agent mode talks to the model from the PC, not from this browser. Check that the PC reaches each model the way the agent does:</p>
+      <div className="agent-check-buttons">
+        <button type="button" className="btn" disabled={running} onClick={() => void check('main')}>
+          {result === 'main' ? 'Checking…' : 'Check main model from the PC'}
+        </button>
+        {settings.second && (
+          <button type="button" className="btn" disabled={running} onClick={() => void check('second')}>
+            {result === 'second' ? 'Checking…' : 'Check second model from the PC'}
+          </button>
+        )}
+      </div>
+      {result && typeof result === 'object' && (
+        <div className={cls('ai-test', result.ok ? 'ok' : 'bad')} role="status">
+          {result.ok ? <CheckCircle2 size={15} /> : <CircleAlert size={15} />} {result.which === 'second' ? 'Second model: ' : 'Main model: '}
+          {result.text}
+        </div>
       )}
     </div>
   );

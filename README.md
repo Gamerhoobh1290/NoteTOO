@@ -449,6 +449,12 @@ it, or repeats a call). Large API models plan better and finish long multi-file 
 large enough context (16384 tokens or more) for multi-file work. With an API model, the passages the agent reads are
 sent to that provider.
 
+**The agent talks to the model from the PC** (Node.js, the NoteTOO server), never from the laptop's browser. If an API
+model answers in normal mode but not in Agent mode, use **AI settings → Check main/second model from the PC**: it calls
+the model exactly as the agent does and shows the PC's real network error (DNS, firewall or VPN, antivirus scanning
+HTTPS…); the same details are printed in the server window. NoteTOO trusts the certificates Windows trusts as well as
+Node.js's own (Node.js 22.15 or later), so antivirus HTTPS scanning does not block it.
+
 ### Two models, and what a task costs
 
 In AI settings you can add a **second model** for the agent, e.g. keep Ollama (`qwen3.5:9b`) as the main model for quick

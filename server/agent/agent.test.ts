@@ -112,6 +112,8 @@ interface Mock {
   refuseStreamOptions: boolean;
   /** OpenAI: report the exact cost in the usage chunk (like OpenRouter) */
   reportCost: number | null;
+  /** OpenAI: cut the connection when the model list is asked for */
+  dropModels: boolean;
   close(): Promise<void>;
 }
 
@@ -139,7 +141,7 @@ function conversation(body: Record<string, unknown>, openai: boolean): Conversat
 }
 
 async function mockModel(kind: 'ollama' | 'openai', policy: Policy): Promise<Mock> {
-  const m: Mock = { url: '', requests: [], policy, nativeTools: true, refuseTools: false, refuseStreamOptions: false, reportCost: null, close: async () => {} };
+  const m: Mock = { url: '', requests: [], policy, nativeTools: true, refuseTools: false, refuseStreamOptions: false, reportCost: null, dropModels: false, close: async () => {} };
   const s = http.createServer(async (req, res) => {
     let raw = '';
     for await (const c of req) raw += c;
@@ -150,12 +152,14 @@ async function mockModel(kind: 'ollama' | 'openai', policy: Policy): Promise<Moc
       return res.end(JSON.stringify({ capabilities: m.nativeTools ? ['completion', 'tools'] : ['completion'], model_info: { 'qwen35.context_length': 262144 } }));
     }
     if (kind === 'openai' && url === '/v1/models') {
+      if (m.dropModels) return void req.socket.destroy();
       if (req.headers.authorization !== 'Bearer sk-test') return void res.writeHead(401).end('{"error":{"message":"bad key"}}');
       res.setHeader('content-type', 'application/json');
       return res.end(JSON.stringify({ data: [{ id: 'cloud/model-x', context_length: 200000, supported_parameters: m.nativeTools ? ['tools', 'tool_choice'] : ['temperature'], pricing: { prompt: '0.0000001', completion: '0.0000005' } }] }));
     }
     if ((kind === 'ollama' && url === '/api/chat') || (kind === 'openai' && url === '/v1/chat/completions')) {
       m.requests.push(body);
+      if (kind === 'openai' && req.headers.authorization !== 'Bearer sk-test') return void res.writeHead(401).end('{"error":{"message":"bad key"}}');
       if (m.refuseStreamOptions && body.stream_options) {
         res.writeHead(400, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ error: { message: 'Unrecognized request argument supplied: stream_options' } }));
@@ -697,9 +701,44 @@ describe('agent: models and costs', () => {
     expect(res.status).toBe(409);
     expect((await res.json()).error).toMatch(/No second model/);
   });
+  it('a model list that cannot be read does not stop the task (the chat request decides)', async () => {
+    await useModel('openai', twoSteps);
+    model.dropModels = true;
+    const r = await runTask('list');
+    expect(r.error).toBeUndefined();
+    expect(r.final!.text).toBe('done');
+    expect(r.events.find((e) => e.type === 'start')).toMatchObject({ provider: 'openai', tools: 'native', contextTokens: 32000 });
+  });
+
+  it('"Check from the PC" tests a model the way the agent calls it, with the settings in the form', async () => {
+    await useModel('openai', () => ({ text: 'OK' }));
+    const call = async (ch: string, ...args: unknown[]) =>
+      (await (await req(`/api/rpc/${ch}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify(args) })).json()).value;
+    const saved = store.get().ai!;
+    const ok = await call('agent:check-model', { settings: saved, model: 'main' });
+    expect(ok).toMatchObject({ ok: true, reply: 'OK' });
+    expect(ok.message).toMatch(/reached cloud\/model-x .*native tool calls, 32k context/);
+    expect(model.requests.at(-1)!.tools).toBeDefined();
+    // the form's unsaved settings are what is checked
+    const wrongKey = await call('agent:check-model', { settings: { ...saved, apiKey: 'sk-wrong' }, model: 'main' });
+    expect(wrongKey).toMatchObject({ ok: false, message: expect.stringMatching(/key/i) });
+    const off = await call('agent:check-model', { settings: { ...saved, baseUrl: 'http://127.0.0.1:9/v1' }, model: 'main' });
+    expect(off).toMatchObject({ ok: false });
+    expect(off.message).toBe("Can't reach http://127.0.0.1:9/v1 from the PC: connect ECONNREFUSED 127.0.0.1:9. Nothing answers at that address and port. Check the PC's internet connection and the server URL in AI settings.");
+    expect(await call('agent:check-model', { settings: saved, model: 'second' })).toMatchObject({ ok: false, message: 'No second model is set up.' });
+  });
 });
 
 describe('agent units', () => {
+  it('network errors are described with a hint', async () => {
+    const { describeNetError } = await import('../net.mts');
+    const err = (code: string, message: string) => Object.assign(new Error(message), { code });
+    expect(describeNetError(err('ENOTFOUND', 'getaddrinfo ENOTFOUND openrouter.ai'))).toMatch(/^getaddrinfo ENOTFOUND openrouter\.ai\. .*DNS/);
+    expect(describeNetError(err('ECONNRESET', 'socket hang up'))).toMatch(/^ECONNRESET: socket hang up\. .*firewall, VPN or antivirus/);
+    expect(describeNetError(err('UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'unable to get local issuer certificate'))).toMatch(/inspects HTTPS/);
+    expect(describeNetError(err('ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:9'))).toMatch(/Nothing answers/);
+  });
+
   it('parses tool arguments the way models send them', () => {
     expect(parseArgs('{"a": 1,}')).toEqual({ args: { a: 1 } });
     expect(parseArgs('"{\\"a\\": 2}"')).toEqual({ args: { a: 2 } });

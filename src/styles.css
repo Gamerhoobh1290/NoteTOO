@@ -2822,6 +2822,15 @@ textarea:focus {
   white-space: nowrap;
   font-size: 12px;
 }
+.agent-check {
+  margin-top: 12px;
+}
+.agent-check-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
 .agent-prices {
   display: grid;
   grid-template-columns: 1fr 1fr;

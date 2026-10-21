@@ -265,6 +265,7 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
     const caps = await detectCapabilities(d.model, signal);
     let mode: ToolMode = caps.tools;
     run.emit({ type: 'start', model: d.model.textModel, provider: d.model.provider, tools: mode, local: caps.local, contextTokens: caps.contextTokens, note: caps.note, which: req.model });
+    if (caps.warning) console.warn(`[agent] ${caps.warning}`);
     const usage = usageTracker(d.model, caps);
 
     // Budgets from the context window: room for the answer, the tool list, then the conversation.
