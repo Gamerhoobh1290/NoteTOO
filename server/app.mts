@@ -438,7 +438,7 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
   // ---------- the agent (server/agent/) ----------
 
   async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
-    const b = (await readJson(req)) as { root?: unknown; message?: unknown; history?: unknown; view?: unknown; model?: unknown } | null;
+    const b = (await readJson(req)) as { root?: unknown; message?: unknown; history?: unknown; view?: unknown; model?: unknown; approvals?: unknown } | null;
     const message = typeof b?.message === 'string' ? b.message.trim() : '';
     if (!message || message.length > 20_000) throw new HttpError(400, 'Invalid request.');
     const root = rootPath(b?.root);
@@ -455,6 +455,7 @@ export function createNoteTooServer(o: ServerOptions): NoteTooServer {
         history,
         view: { openPath: text(v.openPath, 1000), subject: text(v.subject, 300), selection: text(v.selection, 4000) },
         model: b?.model === 'second' ? 'second' : 'main',
+        approvals: b?.approvals === 'auto' ? 'auto' : 'ask',
       });
       sendJson(res, 200, { id: r.id });
     } catch (e) {

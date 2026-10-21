@@ -15,7 +15,12 @@ export interface ApprovalRequest {
   detail: string;
   code?: string;
   paths?: string[];
+  /** auto mode handed this to the user: why */
+  auto?: string;
 }
+
+/** Who answers the agent's approval requests: the user, or a reviewer model (auto mode). */
+export type ApprovalMode = 'ask' | 'auto';
 
 export interface FileChange {
   action: 'created' | 'modified' | 'moved' | 'deleted' | 'folder';
@@ -35,6 +40,7 @@ export type AgentEvent = { seq: number; at: number } & (
   | { type: 'plan'; steps: { title: string; status: string }[] }
   | { type: 'approval'; id: string; request: ApprovalRequest }
   | { type: 'approval_done'; id: string; approved: boolean }
+  | { type: 'review'; tool: string; title: string; decision: 'allow' | 'block' | 'ask'; reason: string; paths?: string[] }
   | { type: 'file'; change: FileChange }
   | { type: 'open'; path: string }
   | { type: 'final'; text: string; sources: string[] }
@@ -84,6 +90,7 @@ export function startRun(o: {
   history: { role: 'user' | 'assistant'; content: string }[];
   view: { openPath?: string; subject?: string; selection?: string };
   model: ModelChoice;
+  approvals: ApprovalMode;
 }) {
   return post<{ id: string }>('/api/agent/runs', o).then((r) => r.id);
 }
@@ -145,6 +152,8 @@ export interface AgentSettings {
   scripts: 'ask' | 'off';
   python: string;
   maxSteps: number;
+  /** auto mode's reviewer: the model doing the task, or a set one */
+  reviewer: 'same' | 'main' | 'second';
 }
 
 export interface AgentStatus {

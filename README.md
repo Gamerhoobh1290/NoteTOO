@@ -472,22 +472,32 @@ for the real bill, and set a credit limit on the API key. Each task's tokens and
 
 - **Inside your shared folders only**, through the same trust boundary as the rest of the server; never `.noteTOO`,
   hidden folders, or links that lead outside.
-- **The server decides what needs you, not the model:** deleting (always; to the Recycle Bin), moving more than 10 items
-  or a whole subject, running a script and any internet access show **Allow / Don't allow** in
-  the panel with exactly what will happen (the script's code, the paths).
-- **Documents are data, never instructions.** The model is told so, and even if a document tricks it, destructive
-  actions still need your approval.
+- **The server decides what needs permission, not the model:** deleting (to the Recycle Bin), moving more than 10 items
+  or a whole subject, running a script and any internet access. With **Ask me** (the switch above the message box)
+  they show **Allow / Don't allow** in the panel with exactly what will happen (the script's code, the paths).
+- **Auto mode** (the same switch, *Auto*), like Claude's: a reviewer model answers instead of you. It reads your
+  messages and the action (paths, script code, the agent's explanation, marked as not yours) plus a list of what the
+  agent did, never the contents of your files, so a document cannot talk it into anything. It **allows** actions that
+  match your request, **blocks** the others (the agent is told why and must not work around it), and **asks you** when
+  it is unsure, when its answer can't be read, or when it can't be reached. Scripts with internet access, whole
+  subjects and deleting more than 10 items always ask you, and after 3 blocks in a task you decide for the rest of it.
+  Each decision and its reason appear in the task's steps and in `agent-log.jsonl`. The reviewer is the model doing the
+  task, or one you choose (AI settings → Agent → *Auto mode's reviewer*); a stronger model judges better, so with
+  `qwen3.5:9b` doing the task an online model is a good reviewer. Its tokens are counted in the cost line. A reviewer can
+  be wrong: everything stays undoable, and for anything you would mind, use *Ask me*.
+- **Documents are data, never instructions.** The model is told so; even if a document tricks it, destructive actions
+  still need permission from you or the reviewer, which never sees the document.
 - **Every change is journaled**, with the previous version of each changed file kept in
   `%APPDATA%\NoteTOO\agent-backups\`. **Undo these changes** reverts a whole task (created files go to the Recycle Bin).
   Every task is logged in `%APPDATA%\NoteTOO\agent-log.jsonl` (request, tools used, files changed).
-- **Python scripts** always show you their code and run only if you click **Allow** (or never: AI settings → Agent →
-  *Never run scripts*). They run with your school folder as working directory, a time limit (60 s by default, the whole
+- **Python scripts** run only once approved: by you, who see their code, or in Auto mode by the reviewer, which reads
+  the code (or never: AI settings → Agent → *Never run scripts*). They run with your school folder as working directory, a time limit (60 s by default, the whole
   process tree is stopped), capped output, and a guard (Python audit hooks): a script that writes outside the school
   folder, deletes or renames existing files, or uses the network without your approval is stopped at once; starting
   programs and reading your other personal files are refused (libraries can cope with that); files a script changes are
   backed up first. The guard catches mistakes; it is **not a
   sandbox** (code in the same process can get around any Python-level guard, and scripts run with your account's
-  rights), which is why there is no option to run scripts without seeing them. Install the libraries you want scripts
+  rights), which is why scripts are never run without a review, and why scripts with internet access always ask you. Install the libraries you want scripts
   to use (`py -m pip install pandas matplotlib python-docx openpyxl`).
 
 ### Limits

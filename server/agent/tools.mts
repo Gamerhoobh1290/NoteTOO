@@ -1,7 +1,8 @@
 // The agent's tools: one registry for every model and provider. Each tool works on the shared
 // school folder through electron/disk.mts (the trust boundary: paths are resolved there and refused
 // outside the folder), declares its risk, and the server, not the model, decides what needs the
-// user's approval: deleting, big reorganizations, scripts (by setting) and network access.
+// user's approval: deleting, big reorganizations, scripts (by setting) and network access. In auto
+// mode a reviewer model answers instead of the user (review.mts), except for what is marked `always`.
 // Every change is journaled with a backup of the previous version, so a whole run can be undone.
 
 import { existsSync, promises as fsp, realpathSync } from 'node:fs';
@@ -25,9 +26,11 @@ export interface AgentSettings {
   /** a specific python.exe (else py -3 / python3 / python) */
   python: string;
   maxSteps: number;
+  /** auto mode: which model reviews the actions (the one doing the task, or a set one) */
+  reviewer: 'same' | 'main' | 'second';
 }
 
-export const DEFAULT_AGENT_SETTINGS: AgentSettings = { scripts: 'ask', python: '', maxSteps: 0 };
+export const DEFAULT_AGENT_SETTINGS: AgentSettings = { scripts: 'ask', python: '', maxSteps: 0, reviewer: 'same' };
 
 export function parseAgentSettings(raw: unknown): AgentSettings {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<AgentSettings>;
@@ -36,6 +39,7 @@ export function parseAgentSettings(raw: unknown): AgentSettings {
     scripts: r.scripts === 'off' ? 'off' : 'ask',
     python: typeof r.python === 'string' ? r.python.trim() : '',
     maxSteps: Number.isInteger(r.maxSteps) && r.maxSteps! >= 0 && r.maxSteps! <= 100 ? r.maxSteps! : 0,
+    reviewer: r.reviewer === 'main' || r.reviewer === 'second' ? r.reviewer : 'same',
   };
 }
 
@@ -60,6 +64,30 @@ export interface ApprovalRequest {
   /** e.g. the script, for display */
   code?: string;
   paths?: string[];
+  /** the agent's own explanation (shown to the reviewer as such, never as the user's words) */
+  reason?: string;
+  /** why this always needs the user, even in auto mode */
+  always?: string;
+  /** auto mode handed this to the user: why */
+  auto?: string;
+}
+
+/** The answer to an approval request: who gave it (the user, or the reviewer in auto mode), and why. */
+export interface Approval {
+  ok: boolean;
+  by: 'user' | 'auto';
+  reason?: string;
+}
+
+/** What the model and the user are told when an action was not allowed. */
+function refused(a: Approval, nothing: string, next: string): ToolResult {
+  return a.by === 'auto'
+    ? {
+        ok: false,
+        content: `Auto mode blocked this: ${a.reason ?? 'it does not match the request.'} ${nothing} Do not try to get the same result another way; ${next}`,
+        summary: 'blocked by auto mode',
+      }
+    : { ok: false, content: `The user declined. ${nothing} ${next[0].toUpperCase()}${next.slice(1)}`, summary: 'declined by you' };
 }
 
 export interface ToolContext {
@@ -81,7 +109,7 @@ export interface ToolContext {
   /** files this run created (overwriting them needs no backup) */
   created: Set<string>;
   record(c: Change): void;
-  approve(req: ApprovalRequest): Promise<boolean>;
+  approve(req: ApprovalRequest): Promise<Approval>;
   progress(msg: string): void;
   setPlan(steps: { title: string; status: string }[]): void;
   open(path: string): void;
@@ -874,13 +902,14 @@ def({
     }
     const subjects = resolved.filter((m) => !m.from.includes('/'));
     if (resolved.length > 10 || subjects.length) {
-      const ok = await ctx.approve({
+      const answer = await ctx.approve({
         tool: 'move',
         title: `Move ${resolved.length} item${resolved.length > 1 ? 's' : ''}?`,
         detail: subjects.length ? `This renames or moves whole subject folders (${subjects.map((s) => s.from).join(', ')}).` : 'This reorganizes many files. Annotations move with them; it can be undone.',
         paths: resolved.map((m) => `${m.from} → ${m.to}`),
+        always: subjects.length ? 'It renames or moves whole subjects.' : undefined,
       });
-      if (!ok) return { ok: false, content: 'The user declined these moves. Nothing was moved. Ask what they prefer, or continue without moving.', summary: 'declined by you' };
+      if (!answer.ok) return refused(answer, 'Nothing was moved.', 'ask the user what they prefer, or continue without moving.');
     }
     const done: string[] = [];
     for (const m of resolved) {
@@ -912,13 +941,16 @@ def({
     const paths = [...new Set(strList(a, 'paths').map((p) => relPath(ctx, p)))].filter(Boolean);
     if (!paths.length) throw new ToolError('Give the paths to delete.');
     for (const p of paths) if (!(await statRel(ctx, p))) throw new ToolError(`"${p}" does not exist. Nothing was deleted.`);
-    const ok = await ctx.approve({
+    const reason = str(a, 'reason', false);
+    const answer = await ctx.approve({
       tool: 'delete',
       title: `Delete ${paths.length} item${paths.length > 1 ? 's' : ''}?`,
-      detail: `${str(a, 'reason', false) || 'The agent wants to delete these.'} They go to the PC's Recycle Bin, with their annotations.`,
+      detail: `${reason || 'The agent wants to delete these.'} They go to the PC's Recycle Bin, with their annotations.`,
       paths,
+      reason: reason || undefined,
+      always: paths.some((p) => !p.includes('/')) ? 'It deletes a whole subject.' : paths.length > 10 ? 'It deletes more than 10 items.' : undefined,
     });
-    if (!ok) return { ok: false, content: 'The user declined. Nothing was deleted.', summary: 'declined by you' };
+    if (!answer.ok) return refused(answer, 'Nothing was deleted.', 'continue without deleting, or tell the user.');
     for (const p of paths) {
       unwrap(await disk.trash(ctx.rootId, p));
       for (const sc of [sidecarPath(p), sidecarDir(p)]) if (existsSync(disk.resolveIn(ctx.rootId, sc))) await disk.trash(ctx.rootId, sc);
@@ -952,13 +984,16 @@ def({
     const code = str(a, 'code');
     const net = bool(a, 'allow_network');
     {
-      const ok = await ctx.approve({
+      const purpose = str(a, 'purpose', false);
+      const answer = await ctx.approve({
         tool: 'run_python',
         title: net ? 'Run a script WITH internet access?' : 'Run a Python script on your PC?',
         detail: `${(str(a, 'purpose', false) || 'No purpose given').replace(/[.!?\s]*$/, '.')} Read the code: it runs with your account's rights. NoteTOO's guard blocks writing outside your school folder, deleting, starting programs${net ? '' : ' and using the internet'}, and backs up files it changes, but the guard is a safety net, not a sandbox.`,
         code,
+        reason: purpose || undefined,
+        always: net ? 'It uses the internet.' : undefined,
       });
-      if (!ok) return { ok: false, content: 'The user declined to run this script. Do it another way, or explain what is needed.', summary: 'declined by you' };
+      if (!answer.ok) return refused(answer, 'The script did not run.', 'do the task with the other tools, or explain to the user what is needed.');
     }
     const timeout = num(a, 'timeout_seconds', 60, 5, 600);
     ctx.progress(`Running the script (up to ${timeout} s)…`);

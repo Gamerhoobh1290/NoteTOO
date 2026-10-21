@@ -3,7 +3,11 @@
 
 import type { AgentEvent, ApprovalRequest, FileChange, ModelChoice, StepStatus, UsageTotal } from './agentClient';
 
-export type TimelineItem = { kind: 'step'; id: string; tool: string; label: string; status: StepStatus; summary?: string; error?: string } | { kind: 'note'; text: string };
+export type TimelineItem =
+  | { kind: 'step'; id: string; tool: string; label: string; status: StepStatus; summary?: string; error?: string }
+  | { kind: 'note'; text: string }
+  /** auto mode's decision on an action that needed permission */
+  | { kind: 'review'; title: string; decision: 'allow' | 'block' | 'ask'; reason: string; paths?: string[] };
 
 export interface AgentView {
   runId: string;
@@ -67,6 +71,8 @@ export function applyAgentEvent(v: AgentView, e: AgentEvent): AgentView {
         status: v.status === 'waiting' ? 'running' : v.status,
         approvals: v.approvals.map((a) => (a.id === e.id ? { ...a, state: e.approved ? 'approved' : 'declined' } : a)),
       };
+    case 'review':
+      return { ...v, timeline: [...v.timeline, { kind: 'review', title: e.title, decision: e.decision, reason: e.reason, paths: e.paths }] };
     case 'file': {
       const files = v.files.filter((f) => !(f.path === e.change.path && f.action !== 'moved' && e.change.action === 'modified'));
       // a file created then modified in the same task stays "created"

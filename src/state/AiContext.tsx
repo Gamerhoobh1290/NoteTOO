@@ -4,7 +4,7 @@
 // here touches disk except "Save to notes" and applying an organize plan, both on explicit action.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AgentRequestError, agentAvailable, type ModelChoice, approve as approveStep, followRun, startRun, stopRun, undoRun } from '../ai/agentClient';
+import { AgentRequestError, agentAvailable, type ApprovalMode, type ModelChoice, approve as approveStep, followRun, startRun, stopRun, undoRun } from '../ai/agentClient';
 import { applyAgentEvent, newAgentView, type AgentView } from '../ai/agentView';
 import { AiError, type ChatMessage } from '../ai/client';
 import { detectIntent, highlightFocus, resolveDocs } from '../ai/context';
@@ -117,6 +117,8 @@ interface Cached {
   profile?: Promise<Profile | null>;
 }
 
+const APPROVALS_KEY = 'notetoo.agentApprovals';
+
 function useAiState() {
   const app = useApp();
   const [messages, setMessages] = useState<AiMessage[]>([]);
@@ -131,6 +133,24 @@ function useAiState() {
   const [agentModel, setAgentModel] = useState<ModelChoice>('main');
   const agentModelRef = useRef(agentModel);
   agentModelRef.current = agentModel;
+  /** Who answers the agent's permission requests: you, or auto mode's reviewer (remembered in this browser). */
+  const [agentApprovals, setAgentApprovalsState] = useState<ApprovalMode>(() => {
+    try {
+      return localStorage.getItem(APPROVALS_KEY) === 'auto' ? 'auto' : 'ask';
+    } catch {
+      return 'ask';
+    }
+  });
+  const agentApprovalsRef = useRef(agentApprovals);
+  agentApprovalsRef.current = agentApprovals;
+  const setAgentApprovals = useCallback((m: ApprovalMode) => {
+    setAgentApprovalsState(m);
+    try {
+      localStorage.setItem(APPROVALS_KEY, m);
+    } catch {
+      /* not remembered */
+    }
+  }, []);
   const busyRef = useRef<Busy | null>(null);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -383,7 +403,7 @@ function useAiState() {
         const sel = selection.current?.path === place.path ? selection.current?.text : undefined;
         const second = getAiSettings()?.second;
         const model: ModelChoice = agentModelRef.current === 'second' && second?.baseUrl.trim() && second.textModel.trim() ? 'second' : 'main';
-        runId = await startRun({ root, message: question, history, view: { openPath: place.kind === 'file' ? place.path : undefined, subject: place.subject, selection: sel }, model });
+        runId = await startRun({ root, message: question, history, view: { openPath: place.kind === 'file' ? place.path : undefined, subject: place.subject, selection: sel }, model, approvals: agentApprovalsRef.current });
         patchAgent(id, (v) => ({ ...v, runId, status: 'running' }));
         ac.signal.addEventListener('abort', () => void stopRun(runId), { once: true });
         let ended = 'running' as AgentView['status'];
@@ -701,7 +721,7 @@ function useAiState() {
   return {
     messages, busy, settingsOpen, setSettingsOpen,
     summarize, explain, highlight, ask, stop, clear, saveToNotes,
-    agentMode, setAgentMode, agentModel, setAgentModel, answerApproval, undoAgent,
+    agentMode, setAgentMode, agentModel, setAgentModel, agentApprovals, setAgentApprovals, answerApproval, undoAgent,
     suggestions, resolveSuggestion, clearSuggestions, focusSuggestion, showSuggestion,
     organize, setOrganize, startOrganize, applyOrganize, closeOrganize,
   };

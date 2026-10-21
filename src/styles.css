@@ -2681,6 +2681,30 @@ textarea:focus {
 .agent-ok {
   color: var(--ok);
 }
+.agent-review {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  line-height: 1.4;
+}
+.agent-review > svg {
+  flex: none;
+  position: relative;
+  top: 2px;
+}
+.agent-review.allow > svg {
+  color: var(--ok);
+}
+.agent-review.block > svg {
+  color: var(--danger);
+}
+.agent-review.ask > svg {
+  color: var(--warn);
+}
+.agent-auto-note {
+  color: var(--warn);
+  font-weight: 500;
+}
 .agent-bad {
   color: var(--danger);
 }
@@ -2810,9 +2834,18 @@ textarea:focus {
   gap: 5px;
   font-size: 13px;
 }
-.agent-model {
+.agent-model,
+.agent-approvals {
   display: flex;
   margin: 8px 12px 0;
+}
+.agent-approvals button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
 }
 .agent-model button {
   flex: 1;

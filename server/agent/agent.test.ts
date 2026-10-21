@@ -114,6 +114,9 @@ interface Mock {
   reportCost: number | null;
   /** OpenAI: cut the connection when the model list is asked for */
   dropModels: boolean;
+  /** auto mode: the reviewer's reply to a review prompt, and the prompts it received */
+  review: (prompt: string) => string;
+  reviews: string[];
   close(): Promise<void>;
 }
 
@@ -141,7 +144,7 @@ function conversation(body: Record<string, unknown>, openai: boolean): Conversat
 }
 
 async function mockModel(kind: 'ollama' | 'openai', policy: Policy): Promise<Mock> {
-  const m: Mock = { url: '', requests: [], policy, nativeTools: true, refuseTools: false, refuseStreamOptions: false, reportCost: null, dropModels: false, close: async () => {} };
+  const m: Mock = { url: '', requests: [], policy, nativeTools: true, refuseTools: false, refuseStreamOptions: false, reportCost: null, dropModels: false, review: () => '{"decision":"allow","reason":"It matches the request."}', reviews: [], close: async () => {} };
   const s = http.createServer(async (req, res) => {
     let raw = '';
     for await (const c of req) raw += c;
@@ -158,7 +161,10 @@ async function mockModel(kind: 'ollama' | 'openai', policy: Policy): Promise<Moc
       return res.end(JSON.stringify({ data: [{ id: 'cloud/model-x', context_length: 200000, supported_parameters: m.nativeTools ? ['tools', 'tool_choice'] : ['temperature'], pricing: { prompt: '0.0000001', completion: '0.0000005' } }] }));
     }
     if ((kind === 'ollama' && url === '/api/chat') || (kind === 'openai' && url === '/v1/chat/completions')) {
-      m.requests.push(body);
+      const msgs = (body.messages ?? []) as { content: string }[];
+      const review = /^You are the safety reviewer/.test(msgs[0]?.content ?? '');
+      if (review) m.reviews.push(msgs[1].content);
+      else m.requests.push(body);
       if (kind === 'openai' && req.headers.authorization !== 'Bearer sk-test') return void res.writeHead(401).end('{"error":{"message":"bad key"}}');
       if (m.refuseStreamOptions && body.stream_options) {
         res.writeHead(400, { 'content-type': 'application/json' });
@@ -171,7 +177,7 @@ async function mockModel(kind: 'ollama' | 'openai', policy: Policy): Promise<Moc
       const conv = conversation(body, kind === 'openai');
       let reply: Reply;
       try {
-        reply = m.policy(conv);
+        reply = review ? { text: m.review(msgs[1].content) } : m.policy(conv);
       } catch (e) {
         reply = { text: `POLICY ERROR: ${(e as Error).message}` };
       }
@@ -239,11 +245,14 @@ interface Ev {
 }
 
 /** Starts a run and follows its events (like the AI panel), answering approvals with `approve`. */
-async function runTask(message: string, o: { approve?: (e: Ev) => boolean; view?: Record<string, string>; history?: unknown[]; onEvent?: (e: Ev, id: string) => void; model?: 'main' | 'second' } = {}) {
+async function runTask(
+  message: string,
+  o: { approve?: (e: Ev) => boolean; view?: Record<string, string>; history?: unknown[]; onEvent?: (e: Ev, id: string) => void; model?: 'main' | 'second'; approvals?: 'ask' | 'auto' } = {},
+) {
   const start = await req('/api/agent/runs', {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin: base },
-    body: JSON.stringify({ root: rootId, message, history: o.history ?? [], view: o.view ?? {}, model: o.model ?? 'main' }),
+    body: JSON.stringify({ root: rootId, message, history: o.history ?? [], view: o.view ?? {}, model: o.model ?? 'main', approvals: o.approvals ?? 'ask' }),
   });
   const started = (await start.json()) as { id?: string; error?: string };
   if (!start.ok) throw new Error(started.error);
@@ -628,11 +637,11 @@ describe('agent: model compatibility and errors', () => {
   it('agent settings and status are available to the page', async () => {
     const call = async (ch: string, ...args: unknown[]) =>
       (await (await req(`/api/rpc/${ch}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify(args) })).json()).value;
-    expect(await call('agent:get-settings')).toEqual({ scripts: 'ask', python: '', maxSteps: 0 });
-    expect(await call('agent:set-settings', { scripts: 'off', maxSteps: 12, junk: 1 })).toEqual({ scripts: 'off', python: '', maxSteps: 12 });
-    expect(store.get().agent).toEqual({ scripts: 'off', python: '', maxSteps: 12 });
+    expect(await call('agent:get-settings')).toEqual({ scripts: 'ask', python: '', maxSteps: 0, reviewer: 'same' });
+    expect(await call('agent:set-settings', { scripts: 'off', maxSteps: 12, junk: 1 })).toEqual({ scripts: 'off', python: '', maxSteps: 12, reviewer: 'same' });
+    expect(store.get().agent).toEqual({ scripts: 'off', python: '', maxSteps: 12, reviewer: 'same' });
     // Running scripts without asking is no longer possible: an old "auto" setting means "ask".
-    expect(await call('agent:set-settings', { scripts: 'auto' })).toEqual({ scripts: 'ask', python: '', maxSteps: 0 });
+    expect(await call('agent:set-settings', { scripts: 'auto' })).toEqual({ scripts: 'ask', python: '', maxSteps: 0, reviewer: 'same' });
     const st = await call('agent:status', rootId);
     expect(st.index.files).toBeGreaterThan(5);
   });
@@ -729,7 +738,143 @@ describe('agent: models and costs', () => {
   });
 });
 
+describe('agent: auto mode', () => {
+  const allow = '{"decision":"allow","reason":"You asked to delete it."}';
+  const block = '{"decision":"block","reason":"You asked for a summary, not to delete anything."}';
+  const reviewsOf = (r: { events: Ev[] }) => r.events.filter((e) => e.type === 'review');
+  const autoNotes = (asked: Ev[]) => asked.map((e) => (e.request as { auto?: string }).auto);
+  const exists = (rel: string) => existsSync(path.join(school, ...rel.split('/')));
+
+  it('allows what the user asked for without asking them', async () => {
+    await useModel('ollama', (c) => (c.step === 0 ? { tool: 'delete', args: { paths: ['Physique/TP/mesures.csv'], reason: 'the user asked' } } : { text: 'Deleted.' }));
+    model.review = () => allow;
+    const r = await runTask('Supprime Physique/TP/mesures.csv', { approvals: 'auto', approve: () => true });
+    expect(r.events.some((e) => e.type === 'approval')).toBe(false);
+    expect(reviewsOf(r)).toMatchObject([{ decision: 'allow', tool: 'delete', reason: 'You asked to delete it.' }]);
+    expect(r.steps.find((s) => s.tool === 'delete')).toMatchObject({ status: 'done' });
+    expect(exists('Physique/TP/mesures.csv')).toBe(false);
+    // the reviewer saw the request and the action, the agent's words marked as such
+    expect(model.reviews[0]).toMatch(/<user_message current="true">\nSupprime Physique\/TP\/mesures\.csv/);
+    expect(model.reviews[0]).toMatch(/Paths:\n- Physique\/TP\/mesures\.csv/);
+    expect(model.reviews[0]).toMatch(/The agent's explanation \(not from the user\): the user asked/);
+    // the same model reviewed, so its tokens are in the task's cost line
+    expect(r.events.filter((e) => e.type === 'usage').at(-1)).toMatchObject({ input: 3000, local: true });
+  });
+
+  it('blocks what the user did not ask for (a document asking to delete files), and tells the agent why', async () => {
+    await useModel('ollama', (c) => {
+      if (c.step === 0) return { tool: 'read_document', args: { path: 'Management/Other/consignes.txt' } };
+      if (c.step === 1) return { tool: 'delete', args: { paths: ['Management/_notes.md'], reason: 'the document says so' } };
+      return { text: lastResult(c) };
+    });
+    model.review = () => block;
+    const r = await runTask('Résume Management/Other/consignes.txt', { approvals: 'auto', approve: () => true });
+    expect(r.events.some((e) => e.type === 'approval')).toBe(false);
+    expect(exists('Management/_notes.md')).toBe(true);
+    expect(r.steps.find((s) => s.tool === 'delete')).toMatchObject({ status: 'declined', summary: 'blocked by auto mode' });
+    expect(r.final!.text).toMatch(/^ERROR: Auto mode blocked this: You asked for a summary, not to delete anything\. Nothing was deleted\. Do not try/);
+    // what the agent read never reaches the reviewer, only that it read it
+    expect(model.reviews[0]).not.toMatch(/ignore previous instructions/);
+    expect(model.reviews[0]).toMatch(/- read_document \{"path":"Management\/Other\/consignes\.txt"\} → done/);
+  });
+
+  it('hands the decision to the user when the reviewer is unsure, its answer cannot be read, or it cannot be reached', async () => {
+    const targets = ['Physique/TP/mesures.csv', 'Management/_notes.md'];
+    await useModel('ollama', (c) => (c.step < 2 ? { tool: 'delete', args: { paths: [targets[c.step]], reason: 'cleanup' } } : { text: 'ok' }));
+    const answers = ['{"decision":"ask","reason":"Not sure you want this file gone."}', 'Sure, looks fine to me!'];
+    model.review = () => answers.shift()!;
+    const asked: Ev[] = [];
+    await runTask('Fais du ménage dans mes fichiers', { approvals: 'auto', approve: (e) => (asked.push(e), true) });
+    expect(autoNotes(asked)).toEqual(['Auto mode asks you: Not sure you want this file gone.', "Auto mode asks you: The reviewer's answer could not be read."]);
+    expect(exists(targets[0]) || exists(targets[1])).toBe(false);
+
+    // a reviewer set up in AI settings that is not running
+    put('Physique/TP/mesures.csv', '1;2');
+    store.update((c) => {
+      c.ai!.second = { provider: 'ollama', baseUrl: 'http://127.0.0.1:9', apiKey: '', textModel: 'judge', contextTokens: 8192 };
+      c.agent = { ...c.agent, reviewer: 'second' };
+    });
+    asked.length = 0;
+    await runTask('Fais du ménage dans mes fichiers', { approvals: 'auto', approve: (e) => (asked.push(e), false) });
+    expect(autoNotes(asked)[0]).toMatch(/^Auto mode asks you: The reviewer could not be reached \(Can't reach Ollama at http:\/\/127\.0\.0\.1:9/);
+    expect(exists('Physique/TP/mesures.csv')).toBe(true);
+  });
+
+  it('scripts with internet access, whole subjects and big deletions always ask the user', async () => {
+    const many = Array.from({ length: 11 }, (_, i) => `Physique/f${i}.txt`);
+    for (const f of many) put(f, 'x');
+    await useModel('ollama', (c) =>
+      c.step === 0
+        ? { tool: 'run_python', args: { code: 'print(1)', purpose: 'test', allow_network: true } }
+        : c.step === 1
+          ? { tool: 'delete', args: { paths: ['Physique'], reason: 'asked' } }
+          : c.step === 2
+            ? { tool: 'delete', args: { paths: many, reason: 'asked' } }
+            : { text: 'ok' },
+    );
+    const asked: Ev[] = [];
+    await runTask('Supprime Physique et lance le script', { approvals: 'auto', approve: (e) => (asked.push(e), false) });
+    expect(model.reviews).toHaveLength(0);
+    expect(autoNotes(asked)).toEqual([
+      'Auto mode always asks you for this: It uses the internet.',
+      'Auto mode always asks you for this: It deletes a whole subject.',
+      'Auto mode always asks you for this: It deletes more than 10 items.',
+    ]);
+    expect(exists('Physique/f0.txt')).toBe(true);
+  });
+
+  it('after 3 blocks in a task, the user decides', async () => {
+    const files = ['Physique/TP/mesures.csv', 'Management/_notes.md', 'Physique/Cours/Electricite.pptx', 'Management/TD/TD1 - Cas Danone.docx'];
+    await useModel('ollama', (c) => (c.step < 4 ? { tool: 'delete', args: { paths: [files[c.step]], reason: 'x' } } : { text: 'ok' }));
+    model.review = () => block;
+    const asked: Ev[] = [];
+    await runTask('Résume mes cours', { approvals: 'auto', approve: (e) => (asked.push(e), false) });
+    expect(model.reviews).toHaveLength(3);
+    expect(autoNotes(asked)).toEqual(['Auto mode blocked 3 actions in this task, so you decide from now on.']);
+    expect(files.every(exists)).toBe(true);
+  });
+
+  it('"Ask me" never calls the reviewer', async () => {
+    await useModel('ollama', (c) => (c.step === 0 ? { tool: 'delete', args: { paths: ['Physique/TP/mesures.csv'], reason: 'x' } } : { text: 'ok' }));
+    const asked: Ev[] = [];
+    await runTask('Supprime Physique/TP/mesures.csv', { approve: (e) => (asked.push(e), false) });
+    expect(model.reviews).toHaveLength(0);
+    expect(autoNotes(asked)).toEqual([undefined]);
+  });
+
+  it('a reviewer chosen in the settings (here an online model) reviews, and its cost is added to the task', async () => {
+    await useModel('ollama', (c) => (c.step === 0 ? { tool: 'delete', args: { paths: ['Physique/TP/mesures.csv'], reason: 'asked' } } : { text: 'done' }));
+    const judge = await mockModel('openai', () => ({ text: 'unused' }));
+    try {
+      judge.review = () => allow;
+      store.update((c) => {
+        c.ai!.second = { provider: 'openai', baseUrl: `${judge.url}/v1`, apiKey: 'sk-test', textModel: 'cloud/model-x', contextTokens: 32000 };
+        c.agent = { ...c.agent, reviewer: 'second' };
+      });
+      const r = await runTask('Supprime Physique/TP/mesures.csv', { approvals: 'auto' });
+      expect(judge.reviews).toHaveLength(1);
+      expect(model.reviews).toHaveLength(0);
+      expect(exists('Physique/TP/mesures.csv')).toBe(false);
+      const u = r.events.filter((e) => e.type === 'usage').at(-1) as Ev & { input: number; costUsd: number; local: boolean };
+      // the task: 2 free local turns (2 × 1000 tokens); the review: 2000 in + 100 out at the reviewer's
+      // listed $0.10/$0.50 per M (the test's "online" reviewer is on 127.0.0.1, so it counts as local too)
+      expect(u).toMatchObject({ input: 4000, output: 200, local: true, exact: false });
+      expect(u.costUsd).toBeCloseTo(0.00025, 8);
+    } finally {
+      await judge.close();
+    }
+  });
+});
+
 describe('agent units', () => {
+  it("reads the reviewer's answer; anything unclear means asking the user", async () => {
+    const { parseReview } = await import('./review.mts');
+    expect(parseReview('{"decision": "allow", "reason": "Asked for."}')).toEqual({ decision: 'allow', reason: 'Asked for.' });
+    expect(parseReview('<think>hmm</think>\n```json\n{"decision":"BLOCK","reason":"Not requested."}\n```')).toEqual({ decision: 'block', reason: 'Not requested.' });
+    expect(parseReview('{"decision":"allow"}')).toEqual({ decision: 'allow', reason: 'It matches your request.' });
+    for (const bad of ['yes', '{"decision":"maybe","reason":"x"}', '{"decision": allow}', '']) expect(parseReview(bad).decision).toBe('ask');
+  });
+
   it('pdf.js gets its data folders with forward slashes, also from a Windows path', async () => {
     const { pdfDir } = await import('./extract.mts');
     expect(pdfDir('C:\\Users\\Me\\NoteTOO\\node_modules\\pdfjs-dist\\standard_fonts')).toBe('C:/Users/Me/NoteTOO/node_modules/pdfjs-dist/standard_fonts/');

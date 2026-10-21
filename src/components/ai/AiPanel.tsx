@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp, Ban, Bot, BookOpenText, Check, ChevronDown, ChevronRight, CircleDot, Copy, ExternalLink, Highlighter, ListTree, NotebookPen, Settings,
-  ShieldQuestion, Sparkles, Square, Trash2, Undo2, Wand2, WifiOff, X,
+  ShieldCheck, ShieldQuestion, ShieldX, Sparkles, Square, Trash2, Undo2, Wand2, WifiOff, X,
 } from 'lucide-react';
 import { agentAvailable } from '../../ai/agentClient';
 import { costLine, visibleChanges, type AgentView, type TimelineItem } from '../../ai/agentView';
@@ -202,6 +202,21 @@ export function AiPanel() {
           <button className="btn small" onClick={ai.stop}>
             <Square size={12} /> Stop
           </button>
+        </div>
+      )}
+
+      {ai.agentMode && agentAvailable && isConfigured(settings) && (
+        <div className="seg agent-approvals" role="radiogroup" aria-label="Who allows the agent's actions">
+          {(
+            [
+              ['ask', 'Ask me', 'Deleting, big reorganizations and scripts wait for your Allow / Don’t allow.'],
+              ['auto', 'Auto', 'A reviewer model allows actions that match your request and blocks the others; it asks you when unsure. Scripts with internet access, whole subjects and big deletions still ask you. Everything can be undone.'],
+            ] as const
+          ).map(([mode, label, title]) => (
+            <button key={mode} type="button" role="radio" aria-checked={ai.agentApprovals === mode} className={cls(ai.agentApprovals === mode && 'on')} title={title} onClick={() => ai.setAgentApprovals(mode)}>
+              {mode === 'auto' ? <ShieldCheck size={12} aria-hidden /> : <ShieldQuestion size={12} aria-hidden />} {label}
+            </button>
+          ))}
         </div>
       )}
 
@@ -415,6 +430,14 @@ function AgentMessage({ m }: { m: AiMessage }) {
                   <li key={i} className="agent-note">
                     {t.text}
                   </li>
+                ) : t.kind === 'review' ? (
+                  <li key={i} className={cls('agent-review', t.decision)}>
+                    {t.decision === 'allow' ? <ShieldCheck size={13} aria-hidden /> : t.decision === 'block' ? <ShieldX size={13} aria-hidden /> : <ShieldQuestion size={13} aria-hidden />}
+                    <span className="agent-step-text">
+                      {t.decision === 'allow' ? 'Auto mode allowed' : t.decision === 'block' ? 'Auto mode blocked' : 'Auto mode asks you'}: {t.title.replace(/\?$/, '')}
+                      <span className="muted"> — {t.reason}</span>
+                    </span>
+                  </li>
                 ) : (
                   <li key={t.id} className={cls('agent-step', t.status)}>
                     <StepIcon status={t.status} />
@@ -436,6 +459,7 @@ function AgentMessage({ m }: { m: AiMessage }) {
           <div className="agent-approval-title">
             <ShieldQuestion size={15} aria-hidden /> {a.request.title}
           </div>
+          {a.request.auto && <p className="agent-auto-note">{a.request.auto}</p>}
           <p>{a.request.detail}</p>
           {a.request.paths && a.request.paths.length > 0 && (
             <ul className="agent-paths">

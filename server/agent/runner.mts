@@ -28,7 +28,8 @@ import {
   type ToolCall,
   type ToolMode,
 } from './providers.mjs';
-import { TOOLS, ToolError, checkArgs, toolByName, undoChanges, type AgentSettings, type ApprovalRequest, type Change, type ToolContext } from './tools.mjs';
+import { MAX_BLOCKS, reviewAction, type ReviewDecision } from './review.mjs';
+import { TOOLS, ToolError, checkArgs, toolByName, undoChanges, type AgentSettings, type Approval, type ApprovalRequest, type Change, type ToolContext } from './tools.mjs';
 
 export interface ViewContext {
   openPath?: string;
@@ -45,6 +46,8 @@ export interface RunRequest {
   view: ViewContext;
   /** which of the models set up in NoteTOO does the work */
   model: ModelChoice;
+  /** 'auto': a reviewer model answers approval requests (review.mts); 'ask': the user does */
+  approvals: 'ask' | 'auto';
 }
 
 /** What a task used so far: tokens and, when it can be known, its price in US dollars. */
@@ -87,6 +90,19 @@ export function usageTracker(model: ModelSettings, caps: Pick<Capabilities, 'loc
   };
 }
 
+/** Two usage totals as one (the task's model and the auto-mode reviewer). */
+export function combineUsage(a: UsageTotal, b?: UsageTotal): UsageTotal {
+  if (!b || (!b.input && !b.output)) return { ...a };
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    costUsd: a.costUsd === null || b.costUsd === null ? null : a.costUsd + b.costUsd,
+    exact: a.exact && b.exact,
+    estimated: a.estimated || b.estimated,
+    local: a.local && b.local,
+  };
+}
+
 export type StepStatus = 'running' | 'done' | 'error' | 'declined';
 
 export type AgentEventBody =
@@ -99,6 +115,8 @@ export type AgentEventBody =
   | { type: 'plan'; steps: { title: string; status: string }[] }
   | { type: 'approval'; id: string; request: ApprovalRequest }
   | { type: 'approval_done'; id: string; approved: boolean }
+  /** auto mode decided on an action (allow/block), or handed it to the user (ask) */
+  | { type: 'review'; tool: string; title: string; decision: ReviewDecision; reason: string; paths?: string[] }
   | { type: 'file'; change: Change }
   | { type: 'open'; path: string }
   | { type: 'final'; text: string; sources: string[] }
@@ -181,6 +199,8 @@ export class AgentRun {
 
 export interface RunnerDeps {
   model: ModelSettings;
+  /** auto mode's reviewer (often the same as `model`) */
+  reviewer?: ModelSettings;
   settings: AgentSettings;
   index: WorkspaceIndex;
   /** the NoteTOO data folder on the PC (backups, scratch folders, audit log) */
@@ -259,6 +279,7 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
   const backupDir = path.join(d.dataDir, 'agent-backups', new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '-' + run.id.slice(0, 8));
   run.backupDir = backupDir;
   const toolLog: { name: string; ok: boolean; label: string }[] = [];
+  const reviews: { tool: string; title: string; decision: ReviewDecision; reason: string }[] = [];
   let finalText = '';
   try {
     run.emit({ type: 'status', text: 'Connecting to the model…' });
@@ -267,6 +288,10 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
     run.emit({ type: 'start', model: d.model.textModel, provider: d.model.provider, tools: mode, local: caps.local, contextTokens: caps.contextTokens, note: caps.note, which: req.model });
     if (caps.warning) console.warn(`[agent] ${caps.warning}`);
     const usage = usageTracker(d.model, caps);
+    const reviewer = d.reviewer ?? d.model;
+    let reviewerUsage: ReturnType<typeof usageTracker> | null = null;
+    const emitUsage = () => run.emit({ type: 'usage', ...combineUsage(usage.total, reviewerUsage?.total) });
+    if (req.approvals === 'auto') run.emit({ type: 'status', text: `Auto mode: ${reviewer === d.model ? 'the same model' : reviewer.textModel} reviews actions that need permission.` });
 
     // Budgets from the context window: room for the answer, the tool list, then the conversation.
     const answerTokens = Math.min(4096, Math.floor(caps.contextTokens * 0.25));
@@ -283,6 +308,34 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
     let history = req.history.slice(-12).map((h) => ({ role: h.role, content: h.content.slice(0, 6000) }) as AgentMessage);
     /** this request and everything done for it */
     let task: AgentMessage[] = [{ role: 'user', content: req.message }];
+    /** what the reviewer is shown: the user's own words, and the agent's actions (not their results) */
+    const userMessages = [...req.history.filter((h) => h.role === 'user').map((h) => h.content), req.message];
+    const actions: string[] = [];
+    let blocks = 0;
+
+    /** The user's answer, or in auto mode the reviewer's (which hands what it can't decide to the user). */
+    const approve = async (r: ApprovalRequest): Promise<Approval> => {
+      if (req.approvals !== 'auto') return { ok: await run.waitForApproval(r), by: 'user' };
+      const handover = r.always
+        ? `Auto mode always asks you for this: ${r.always}`
+        : blocks >= MAX_BLOCKS
+          ? `Auto mode blocked ${MAX_BLOCKS} actions in this task, so you decide from now on.`
+          : '';
+      if (handover) return { ok: await run.waitForApproval({ ...r, auto: handover }), by: 'user' };
+      run.emit({ type: 'status', text: `Auto mode is reviewing: ${r.title}` });
+      const rv = await reviewAction(reviewer, { userMessages, actions, request: r, signal });
+      const tracker = reviewer === d.model ? usage : (reviewerUsage ??= usageTracker(reviewer, await detectCapabilities(reviewer, signal).catch(() => ({ local: false, pricing: undefined }))));
+      tracker.add(rv.usage, { input: Math.ceil(rv.sent / 3), output: Math.ceil(rv.received / 3) });
+      emitUsage();
+      reviews.push({ tool: r.tool, title: r.title, decision: rv.decision, reason: rv.reason });
+      run.emit({ type: 'review', tool: r.tool, title: r.title, decision: rv.decision, reason: rv.reason, paths: r.paths?.slice(0, 20) });
+      if (rv.decision === 'allow') return { ok: true, by: 'auto', reason: rv.reason };
+      if (rv.decision === 'block') {
+        blocks++;
+        return { ok: false, by: 'auto', reason: rv.reason };
+      }
+      return { ok: await run.waitForApproval({ ...r, auto: `Auto mode asks you: ${rv.reason}` }), by: 'user' };
+    };
 
     const ctx: ToolContext = {
       rootId: req.rootId,
@@ -300,7 +353,7 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
         run.changes.push(c);
         run.emit({ type: 'file', change: c });
       },
-      approve: (r) => run.waitForApproval(r),
+      approve,
       progress: (text) => run.emit({ type: 'status', text }),
       setPlan: (steps) => run.emit({ type: 'plan', steps }),
       open: (p) => run.emit({ type: 'open', path: p }),
@@ -356,7 +409,8 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
 
       // What this turn cost; estimated from the text when the provider does not say (≈3 characters a token).
       const sent = sizeOf([system, ...history, ...task]);
-      run.emit({ type: 'usage', ...usage.add(res.usage, { input: Math.ceil(sent / 3), output: Math.ceil((res.content.length + JSON.stringify(res.toolCalls).length) / 3) }) });
+      usage.add(res.usage, { input: Math.ceil(sent / 3), output: Math.ceil((res.content.length + JSON.stringify(res.toolCalls).length) / 3) });
+      emitUsage();
 
       if (res.toolCalls.length && !last) {
         const calls = mode === 'prompted' ? res.toolCalls.slice(0, 1) : res.toolCalls.slice(0, 8);
@@ -365,6 +419,7 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
         for (const call of calls) {
           signal.throwIfAborted();
           const out = await execute(run, ctx, call);
+          actions.push(`${call.name} ${JSON.stringify(call.args).slice(0, 200)} → ${out.ok ? 'done' : out.content.slice(0, 80)}`);
           toolsUsed++;
           toolLog.push({ name: call.name, ok: out.ok, label: out.label });
           failedInARow = out.ok ? 0 : failedInARow + 1;
@@ -424,6 +479,8 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
       model: `${req.model === 'second' ? 'second ' : ''}${d.model.provider}:${d.model.textModel}`,
       request: req.message.slice(0, 300),
       tools: toolLog,
+      approvals: req.approvals,
+      ...(reviews.length ? { reviews } : {}),
       changes: run.changes,
       usage: (({ seq: _s, at: _a, type: _t, ...u }) => u)(run.events.findLast((e) => e.type === 'usage') ?? { seq: 0, at: 0, type: 'usage' }),
       status: run.status,
@@ -457,7 +514,7 @@ async function execute(run: AgentRun, ctx: ToolContext, call: ToolCall): Promise
   run.emit({ type: 'step', id, tool: call.name, label, status: 'running' });
   try {
     const r = await tool.run(call.args, ctx);
-    const declined = !r.ok && /declined/i.test(r.summary);
+    const declined = !r.ok && /declined|blocked by auto mode/i.test(r.summary);
     run.emit({ type: 'step', id, tool: call.name, label, status: r.ok ? 'done' : declined ? 'declined' : 'error', summary: r.summary });
     return { ok: r.ok, content: r.ok ? r.content : `ERROR: ${r.content}`, label };
   } catch (e) {

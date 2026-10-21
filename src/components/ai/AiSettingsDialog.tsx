@@ -233,7 +233,7 @@ function SettingsForm({ close }: { close: () => void }) {
 
       {s.provider === 'openai' && <PriceFields value={s} onChange={(p) => set(p)} openRouter={preset === 'openrouter'} />}
 
-      {onServer && agent && <AgentSection value={agent} onChange={setAgent} />}
+      {onServer && agent && <AgentSection value={agent} onChange={setAgent} hasSecond={!!s.second} />}
       {onServer && <SecondModelSection value={s} onChange={(p) => set(p)} />}
       {onServer && agent && <AgentModelCheck settings={s} />}
 
@@ -266,7 +266,7 @@ function SettingsForm({ close }: { close: () => void }) {
 }
 
 /** The agent (on the PC): what scripts may do, which Python, how many steps; and what it found. */
-function AgentSection({ value, onChange }: { value: AgentSettings; onChange: (s: AgentSettings) => void }) {
+function AgentSection({ value, onChange, hasSecond }: { value: AgentSettings; onChange: (s: AgentSettings) => void; hasSecond: boolean }) {
   const app = useApp();
   const root = app.fs?.desktop?.rootId;
   const [status, setStatus] = useState<AgentStatus | null>(null);
@@ -288,12 +288,13 @@ function AgentSection({ value, onChange }: { value: AgentSettings; onChange: (s:
       <h3>Agent</h3>
       <p className="muted hint">
         The agent works on your PC with your whole school folder: it finds and reads files, creates and changes documents. Deleting files, big
-        reorganizations, scripts and internet access always ask you first; every change can be undone.
+        reorganizations, scripts and internet access need permission first: yours, or in <strong>Auto</strong> mode (the switch above the
+        message box) a reviewer model’s. Every change can be undone.
       </p>
       <label className="field">
         <span>Python scripts written by the agent</span>
         <select value={value.scripts} onChange={(e) => onChange({ ...value, scripts: e.target.value as AgentSettings['scripts'] })}>
-          <option value="ask">Ask me before each script (shows the code)</option>
+          <option value="ask">Allowed, each one approved first (shows the code)</option>
           <option value="off">Never run scripts</option>
         </select>
       </label>
@@ -301,6 +302,21 @@ function AgentSection({ value, onChange }: { value: AgentSettings; onChange: (s:
         <span>Python program (optional)</span>
         <input value={value.python} onChange={(e) => onChange({ ...value, python: e.target.value })} placeholder="Found automatically (py -3, python3, python)" spellCheck={false} />
       </label>
+      <label className="field">
+        <span>Auto mode’s reviewer</span>
+        <select value={value.reviewer} onChange={(e) => onChange({ ...value, reviewer: e.target.value as AgentSettings['reviewer'] })}>
+          <option value="same">The model doing the task</option>
+          <option value="main">Always the main model</option>
+          <option value="second" disabled={!hasSecond}>
+            Always the second model{hasSecond ? '' : ' (set one up below)'}
+          </option>
+        </select>
+      </label>
+      <p className="muted hint">
+        In Auto mode the reviewer reads your request and the action (never your files’ contents), then allows it, blocks it, or asks you. A
+        stronger model reviews more reliably: with a small local model doing the task, an online model as reviewer is a good choice. Scripts
+        with internet access, whole subjects and deleting more than 10 items always ask you; after 3 blocks in a task, you decide.
+      </p>
       <label className="field">
         <span>Maximum steps per task (0 = automatic: 20 for local models, 30 for online ones)</span>
         <input type="number" min={0} max={100} value={value.maxSteps} onChange={(e) => onChange({ ...value, maxSteps: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })} />

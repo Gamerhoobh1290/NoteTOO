@@ -45,6 +45,18 @@ describe('agent view', () => {
     expect(v.approvals.map((a) => a.state)).toEqual(['approved', 'declined']);
   });
 
+  it("auto mode's decisions appear in the timeline, in order with the steps", () => {
+    const v = run(
+      { type: 'step', id: 's1', tool: 'delete', label: 'Deleting 1 item(s)', status: 'running' },
+      { type: 'review', tool: 'delete', title: 'Delete 1 item?', decision: 'block', reason: 'You did not ask for it.', paths: ['a.pdf'] },
+      { type: 'step', id: 's1', tool: 'delete', label: 'Deleting 1 item(s)', status: 'declined', summary: 'blocked by auto mode' },
+    );
+    expect(v.timeline).toEqual([
+      { kind: 'step', id: 's1', tool: 'delete', label: 'Deleting 1 item(s)', status: 'declined', summary: 'blocked by auto mode', error: undefined },
+      { kind: 'review', title: 'Delete 1 item?', decision: 'block', reason: 'You did not ask for it.', paths: ['a.pdf'] },
+    ]);
+  });
+
   it('errors are shown, a stop is not an error', () => {
     expect(run({ type: 'error', message: "Can't reach Ollama", kind: 'unreachable' }).error).toBe("Can't reach Ollama");
     expect(run({ type: 'error', message: 'Stopped.', kind: 'stopped' }).error).toBeUndefined();

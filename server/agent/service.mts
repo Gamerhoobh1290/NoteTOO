@@ -90,9 +90,12 @@ export function createAgentService(store: ConfigStore) {
         );
       }
       prune();
+      const settings = this.settings();
+      // Auto mode's reviewer: the model doing the task, or the one chosen in the agent settings.
+      const chosen = settings.reviewer === 'same' || settings.reviewer === req.model ? null : modelSettings(store.get().ai, settings.reviewer);
       const run = new AgentRun(req);
       runs.set(run.id, run);
-      void runAgent(run, { model, settings: this.settings(), index: indexes.get(req.rootId, req.rootPath), dataDir: store.dataDir });
+      void runAgent(run, { model, reviewer: chosen ?? model, settings, index: indexes.get(req.rootId, req.rootPath), dataDir: store.dataDir });
       return run;
     },
 
