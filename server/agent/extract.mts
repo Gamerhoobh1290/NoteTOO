@@ -42,10 +42,15 @@ function pdfjs(): Promise<PdfJs> {
   pdfjsPromise ??= import('pdfjs-dist/legacy/build/pdf.mjs' as string).then((m) => m as PdfJs);
   return pdfjsPromise;
 }
+/**
+ * A folder as pdf.js wants it: ending in "/". It refuses "C:\…\" (so on Windows every PDF failed);
+ * Node.js reads "C:/…/" on Windows just as well.
+ */
+export const pdfDir = (dir: string) => dir.replace(/\\/g, '/').replace(/\/*$/, '/');
 /** pdf.js font and character map data, read from disk in Node.js. */
 const pdfAssets = () => {
   const dir = path.dirname(require.resolve('pdfjs-dist/package.json'));
-  return { standardFontDataUrl: path.join(dir, 'standard_fonts') + path.sep, cMapUrl: path.join(dir, 'cmaps') + path.sep, cMapPacked: true };
+  return { standardFontDataUrl: pdfDir(path.join(dir, 'standard_fonts')), cMapUrl: pdfDir(path.join(dir, 'cmaps')), cMapPacked: true };
 };
 
 async function readPdf(data: Uint8Array, signal?: AbortSignal): Promise<ServerDoc> {

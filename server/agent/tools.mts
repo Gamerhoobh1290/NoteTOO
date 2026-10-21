@@ -169,7 +169,8 @@ function absPath(ctx: ToolContext, rel: string): string {
   try {
     const real = realpathSync(probe);
     const rootReal = realpathSync(ctx.root);
-    if (real !== rootReal && !real.toLowerCase().startsWith(rootReal.toLowerCase() + path.sep)) throw new ToolError(`"${rel}" leads outside the school folder.`);
+    const prefix = (rootReal.endsWith(path.sep) ? rootReal : rootReal + path.sep).toLowerCase();
+    if (real !== rootReal && !real.toLowerCase().startsWith(prefix)) throw new ToolError(`"${rel}" leads outside the school folder.`);
   } catch (e) {
     if (e instanceof ToolError) throw e;
   }

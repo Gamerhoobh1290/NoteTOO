@@ -75,7 +75,7 @@ export function createDownloads() {
       if (!st) throw new DownloadError(`"${rel}" no longer exists.`);
       if (st.isSymbolicLink()) return;
       const real = realpathSync(full);
-      if (!real.startsWith(rootReal + path.sep)) throw new DownloadError(`"${rel}" leads outside the shared folder.`);
+      if (!real.startsWith(rootReal.endsWith(path.sep) ? rootReal : rootReal + path.sep)) throw new DownloadError(`"${rel}" leads outside the shared folder.`);
       const entry = rel.split('/').slice(common.length).join('/');
       if (st.isDirectory()) {
         for (const d of await fsp.readdir(full, { withFileTypes: true })) if (!skip(d.name)) await add(`${rel}/${d.name}`);

@@ -730,6 +730,12 @@ describe('agent: models and costs', () => {
 });
 
 describe('agent units', () => {
+  it('pdf.js gets its data folders with forward slashes, also from a Windows path', async () => {
+    const { pdfDir } = await import('./extract.mts');
+    expect(pdfDir('C:\\Users\\Me\\NoteTOO\\node_modules\\pdfjs-dist\\standard_fonts')).toBe('C:/Users/Me/NoteTOO/node_modules/pdfjs-dist/standard_fonts/');
+    expect(pdfDir('/home/me/pdfjs-dist/cmaps/')).toBe('/home/me/pdfjs-dist/cmaps/');
+  });
+
   it('network errors are described with a hint', async () => {
     const { describeNetError } = await import('../net.mts');
     const err = (code: string, message: string) => Object.assign(new Error(message), { code });

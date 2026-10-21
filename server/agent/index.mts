@@ -17,7 +17,8 @@ const MAX_DEPTH = 14;
 /** Bigger files are listed but not read for search. */
 const MAX_INDEX_BYTES = 80 * 1024 * 1024;
 const PASSAGE_CHARS = 1400;
-const INDEX_VERSION = 2;
+/** 3: PDFs that failed on Windows (pdf.js data folder) are read again. */
+const INDEX_VERSION = 3;
 /** A folder scan is reused for this long before walking the disk again. */
 const FRESH_MS = 15_000;
 
