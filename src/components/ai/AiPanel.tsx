@@ -210,7 +210,7 @@ export function AiPanel() {
           {(
             [
               ['ask', 'Ask me', 'Deleting, big reorganizations and scripts wait for your Allow / Don’t allow.'],
-              ['auto', 'Auto', 'A reviewer model allows actions that match your request and blocks the others; it asks you when unsure. Scripts with internet access, whole subjects and big deletions still ask you. Everything can be undone.'],
+              ['auto', 'Auto', 'A reviewer model allows actions that match your request and blocks the others; it asks you when unsure. Scripts, deleting folders and deleting more than 10 files still ask you. Everything can be undone.'],
             ] as const
           ).map(([mode, label, title]) => (
             <button key={mode} type="button" role="radio" aria-checked={ai.agentApprovals === mode} className={cls(ai.agentApprovals === mode && 'on')} title={title} onClick={() => ai.setAgentApprovals(mode)}>

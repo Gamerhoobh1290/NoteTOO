@@ -940,7 +940,12 @@ def({
   async run(a, ctx) {
     const paths = [...new Set(strList(a, 'paths').map((p) => relPath(ctx, p)))].filter(Boolean);
     if (!paths.length) throw new ToolError('Give the paths to delete.');
-    for (const p of paths) if (!(await statRel(ctx, p))) throw new ToolError(`"${p}" does not exist. Nothing was deleted.`);
+    const folders: string[] = [];
+    for (const p of paths) {
+      const st = await statRel(ctx, p);
+      if (!st) throw new ToolError(`"${p}" does not exist. Nothing was deleted.`);
+      if (st.isDirectory()) folders.push(p);
+    }
     const reason = str(a, 'reason', false);
     const answer = await ctx.approve({
       tool: 'delete',
@@ -948,7 +953,14 @@ def({
       detail: `${reason || 'The agent wants to delete these.'} They go to the PC's Recycle Bin, with their annotations.`,
       paths,
       reason: reason || undefined,
-      always: paths.some((p) => !p.includes('/')) ? 'It deletes a whole subject.' : paths.length > 10 ? 'It deletes more than 10 items.' : undefined,
+      // a folder can hold any number of files: never left to a model
+      always: paths.some((p) => !p.includes('/'))
+        ? 'It deletes a whole subject.'
+        : folders.length
+          ? `It deletes a folder (${folders[0]}${folders.length > 1 ? ` and ${folders.length - 1} more` : ''}).`
+          : paths.length > 10
+            ? 'It deletes more than 10 items.'
+            : undefined,
     });
     if (!answer.ok) return refused(answer, 'Nothing was deleted.', 'continue without deleting, or tell the user.');
     for (const p of paths) {
@@ -991,7 +1003,8 @@ def({
         detail: `${(str(a, 'purpose', false) || 'No purpose given').replace(/[.!?\s]*$/, '.')} Read the code: it runs with your account's rights. NoteTOO's guard blocks writing outside your school folder, deleting, starting programs${net ? '' : ' and using the internet'}, and backs up files it changes, but the guard is a safety net, not a sandbox.`,
         code,
         reason: purpose || undefined,
-        always: net ? 'It uses the internet.' : undefined,
+        // Scripts run with the user's rights and the guard is not a sandbox: a model's "allow" is not enough.
+        always: net ? 'It uses the internet.' : 'It runs a program on your PC (scripts are not sandboxed).',
       });
       if (!answer.ok) return refused(answer, 'The script did not run.', 'do the task with the other tools, or explain to the user what is needed.');
     }

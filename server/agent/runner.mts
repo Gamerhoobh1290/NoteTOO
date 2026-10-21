@@ -419,7 +419,8 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
         for (const call of calls) {
           signal.throwIfAborted();
           const out = await execute(run, ctx, call);
-          actions.push(`${call.name} ${JSON.stringify(call.args).slice(0, 200)} → ${out.ok ? 'done' : out.content.slice(0, 80)}`);
+          // the call, not its result: what the agent read must not reach the reviewer
+          actions.push(`${call.name} ${JSON.stringify(call.args).slice(0, 200)} → ${out.ok ? 'done' : 'failed'}`);
           toolsUsed++;
           toolLog.push({ name: call.name, ok: out.ok, label: out.label });
           failedInARow = out.ok ? 0 : failedInARow + 1;

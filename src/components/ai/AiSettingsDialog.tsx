@@ -314,8 +314,8 @@ function AgentSection({ value, onChange, hasSecond }: { value: AgentSettings; on
       </label>
       <p className="muted hint">
         In Auto mode the reviewer reads your request and the action (never your files’ contents), then allows it, blocks it, or asks you. A
-        stronger model reviews more reliably: with a small local model doing the task, an online model as reviewer is a good choice. Scripts
-        with internet access, whole subjects and deleting more than 10 items always ask you; after 3 blocks in a task, you decide.
+        stronger model reviews more reliably: with a small local model doing the task, an online model as reviewer is a good choice. Scripts,
+        deleting folders and deleting more than 10 files always ask you; after 3 blocks in a task, you decide.
       </p>
       <label className="field">
         <span>Maximum steps per task (0 = automatic: 20 for local models, 30 for online ones)</span>
