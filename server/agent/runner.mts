@@ -21,8 +21,10 @@ import {
   promptedInstructions,
   type AgentMessage,
   type Capabilities,
+  type ModelChoice,
   type ModelSettings,
   type StepResult,
+  type Usage,
   type ToolCall,
   type ToolMode,
 } from './providers.mjs';
@@ -41,12 +43,55 @@ export interface RunRequest {
   /** earlier turns of the conversation (final texts only) */
   history: { role: 'user' | 'assistant'; content: string }[];
   view: ViewContext;
+  /** which of the models set up in NoteTOO does the work */
+  model: ModelChoice;
+}
+
+/** What a task used so far: tokens and, when it can be known, its price in US dollars. */
+export interface UsageTotal {
+  input: number;
+  output: number;
+  /** null: the price of this model is unknown (no listed price and none set in AI settings) */
+  costUsd: number | null;
+  /** the provider reported exact costs (OpenRouter) */
+  exact: boolean;
+  /** some tokens were estimated (the provider did not report them) */
+  estimated: boolean;
+  local: boolean;
+}
+
+/**
+ * Adds up a task's tokens and price: exact costs the provider reports first, else the prices set in
+ * AI settings, else the provider's listed prices; models on this PC or network cost nothing.
+ */
+export function usageTracker(model: ModelSettings, caps: Pick<Capabilities, 'local' | 'pricing'>) {
+  const total: UsageTotal = { input: 0, output: 0, costUsd: 0, exact: true, estimated: false, local: caps.local };
+  const manual = (model.inputPerM ?? 0) > 0 || (model.outputPerM ?? 0) > 0;
+  const price = manual ? { inputPerM: model.inputPerM ?? 0, outputPerM: model.outputPerM ?? 0 } : caps.pricing;
+  return {
+    total,
+    add(u: Usage | undefined, guess: { input: number; output: number }) {
+      const step = u ?? guess;
+      if (!u) total.estimated = true;
+      total.input += step.input;
+      total.output += step.output;
+      let cost: number | null;
+      if (u?.costUsd !== undefined) cost = u.costUsd;
+      else {
+        total.exact = false;
+        cost = price ? (step.input * price.inputPerM + step.output * price.outputPerM) / 1e6 : caps.local ? 0 : null;
+      }
+      total.costUsd = total.costUsd === null || cost === null ? null : total.costUsd + cost;
+      return { ...total };
+    },
+  };
 }
 
 export type StepStatus = 'running' | 'done' | 'error' | 'declined';
 
 export type AgentEventBody =
-  | { type: 'start'; model: string; provider: string; tools: ToolMode; local: boolean; contextTokens: number; note?: string }
+  | { type: 'start'; model: string; provider: string; tools: ToolMode; local: boolean; contextTokens: number; note?: string; which: ModelChoice }
+  | ({ type: 'usage' } & UsageTotal)
   | { type: 'status'; text: string }
   | { type: 'token'; text: string }
   | { type: 'note'; text: string }
@@ -219,7 +264,8 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
     run.emit({ type: 'status', text: 'Connecting to the model…' });
     const caps = await detectCapabilities(d.model, signal);
     let mode: ToolMode = caps.tools;
-    run.emit({ type: 'start', model: d.model.textModel, provider: d.model.provider, tools: mode, local: caps.local, contextTokens: caps.contextTokens, note: caps.note });
+    run.emit({ type: 'start', model: d.model.textModel, provider: d.model.provider, tools: mode, local: caps.local, contextTokens: caps.contextTokens, note: caps.note, which: req.model });
+    const usage = usageTracker(d.model, caps);
 
     // Budgets from the context window: room for the answer, the tool list, then the conversation.
     const answerTokens = Math.min(4096, Math.floor(caps.contextTokens * 0.25));
@@ -307,6 +353,10 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
         }
       }
 
+      // What this turn cost; estimated from the text when the provider does not say (≈3 characters a token).
+      const sent = sizeOf([system, ...history, ...task]);
+      run.emit({ type: 'usage', ...usage.add(res.usage, { input: Math.ceil(sent / 3), output: Math.ceil((res.content.length + JSON.stringify(res.toolCalls).length) / 3) }) });
+
       if (res.toolCalls.length && !last) {
         const calls = mode === 'prompted' ? res.toolCalls.slice(0, 1) : res.toolCalls.slice(0, 8);
         if (res.content) run.emit({ type: 'note', text: res.content });
@@ -370,10 +420,11 @@ export async function runAgent(run: AgentRun, d: RunnerDeps): Promise<void> {
       at: new Date(run.createdAt).toISOString(),
       run: run.id,
       folder: req.rootPath,
-      model: `${d.model.provider}:${d.model.textModel}`,
+      model: `${req.model === 'second' ? 'second ' : ''}${d.model.provider}:${d.model.textModel}`,
       request: req.message.slice(0, 300),
       tools: toolLog,
       changes: run.changes,
+      usage: (({ seq: _s, at: _a, type: _t, ...u }) => u)(run.events.findLast((e) => e.type === 'usage') ?? { seq: 0, at: 0, type: 'usage' }),
       status: run.status,
     };
     await mkdir(d.dataDir, { recursive: true }).catch(() => {});

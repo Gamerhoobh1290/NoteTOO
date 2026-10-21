@@ -21,6 +21,16 @@ export interface ModelSettings {
   apiKey: string;
   textModel: string;
   contextTokens: number;
+  /** US dollars per million input / output tokens set by the user (0 = unknown) */
+  inputPerM?: number;
+  outputPerM?: number;
+}
+
+/** Tokens a model turn used, as the provider reported them; `costUsd` when the provider bills it exactly. */
+export interface Usage {
+  input: number;
+  output: number;
+  costUsd?: number;
 }
 
 export interface ToolSpec {
@@ -53,6 +63,8 @@ export interface Capabilities {
   local: boolean;
   /** why tools are prompted, for display */
   note?: string;
+  /** prices the provider lists for the model, in US dollars per million tokens */
+  pricing?: { inputPerM: number; outputPerM: number };
 }
 
 export interface StepResult {
@@ -60,6 +72,7 @@ export interface StepResult {
   toolCalls: ToolCall[];
   /** the step ended because the answer hit the output limit */
   truncated?: boolean;
+  usage?: Usage;
 }
 
 export type ModelErrorKind = 'unreachable' | 'auth' | 'model' | 'rate' | 'context' | 'tools' | 'server' | 'other';
@@ -298,13 +311,19 @@ export async function detectCapabilities(s: ModelSettings, signal?: AbortSignal)
     } else {
       const res = await request(s, '/models', { signal });
       if (res.status === 200) {
-        const j = JSON.parse(await res.text()) as { data?: { id: string; context_length?: number; supported_parameters?: string[] }[] };
+        const j = JSON.parse(await res.text()) as {
+          data?: { id: string; context_length?: number; supported_parameters?: string[]; pricing?: { prompt?: string | number; completion?: string | number } }[];
+        };
         const m = j.data?.find((x) => x.id === s.textModel);
         if (m?.supported_parameters && !m.supported_parameters.includes('tools')) {
           caps.tools = 'prompted';
           caps.note = `${s.textModel} has no native tool calling on this provider; NoteTOO describes the tools in the prompt instead.`;
         }
         if (m?.context_length && m.context_length > 2048) caps.contextTokens = Math.min(caps.contextTokens, m.context_length);
+        // OpenRouter lists prices per token, in US dollars.
+        const perM = (x: unknown) => (Number.isFinite(Number(x)) && Number(x) >= 0 ? Number(x) * 1e6 : NaN);
+        const [pin, pout] = [perM(m?.pricing?.prompt), perM(m?.pricing?.completion)];
+        if (!Number.isNaN(pin) && !Number.isNaN(pout)) caps.pricing = { inputPerM: pin, outputPerM: pout };
       } else await res.text();
     }
   } catch (e) {
@@ -433,8 +452,16 @@ async function stepOllama(s: ModelSettings, o: StepOptions): Promise<StepResult>
   let text = '';
   const calls: ToolCall[] = [];
   let truncated = false;
+  let usage: Usage | undefined;
   for await (const line of res.lines) {
-    let j: { message?: { content?: string; tool_calls?: { function?: { name?: string; arguments?: unknown } }[] }; error?: string; done?: boolean; done_reason?: string };
+    let j: {
+      message?: { content?: string; tool_calls?: { function?: { name?: string; arguments?: unknown } }[] };
+      error?: string;
+      done?: boolean;
+      done_reason?: string;
+      prompt_eval_count?: number;
+      eval_count?: number;
+    };
     try {
       j = JSON.parse(line);
     } catch {
@@ -451,9 +478,13 @@ async function stepOllama(s: ModelSettings, o: StepOptions): Promise<StepResult>
       calls.push({ id: newCallId(), name: c.function.name, args, ...(error ? { argsError: error } : {}) });
     }
     if (j.done && j.done_reason === 'length') truncated = true;
+    if (j.done && (j.prompt_eval_count || j.eval_count)) usage = { input: j.prompt_eval_count ?? 0, output: j.eval_count ?? 0 };
   }
-  return finish(prompted, stripThinking(text), calls, o.tools, truncated);
+  return finish(prompted, stripThinking(text), calls, o.tools, truncated, usage);
 }
+
+/** Servers that refused `stream_options` (asking for token usage in the stream). */
+const noUsageOption = new Set<string>();
 
 async function stepOpenAi(s: ModelSettings, o: StepOptions, jsonMode = true): Promise<StepResult> {
   const prompted = o.mode === 'prompted';
@@ -461,6 +492,8 @@ async function stepOpenAi(s: ModelSettings, o: StepOptions, jsonMode = true): Pr
   const body = {
     model: s.textModel,
     stream: true,
+    // The last chunk then reports the tokens used (and OpenRouter the exact cost).
+    ...(noUsageOption.has(s.baseUrl) ? {} : { stream_options: { include_usage: true } }),
     ...(prompted
       ? jsonMode
         ? { response_format: { type: 'json_object' } }
@@ -485,20 +518,35 @@ async function stepOpenAi(s: ModelSettings, o: StepOptions, jsonMode = true): Pr
   const res = await request(s, '/chat/completions', { body, signal: o.signal });
   if (res.status !== 200) {
     const err = httpError(s, res.status, await res.text());
+    if (!noUsageOption.has(s.baseUrl) && /stream_options|include_usage/i.test(err.message)) {
+      noUsageOption.add(s.baseUrl);
+      return stepOpenAi(s, o, jsonMode);
+    }
     // Some providers have no JSON mode: the prompt still asks for JSON.
     if (prompted && jsonMode && err.kind === 'other' && /response_format|json/i.test(err.message)) return stepOpenAi(s, o, false);
     throw err;
   }
   let text = '';
   let truncated = false;
+  let usage: Usage | undefined;
+  const readUsage = (u?: { prompt_tokens?: number; completion_tokens?: number; cost?: number }) => {
+    if (u && (u.prompt_tokens || u.completion_tokens)) {
+      usage = { input: u.prompt_tokens ?? 0, output: u.completion_tokens ?? 0, ...(typeof u.cost === 'number' ? { costUsd: u.cost } : {}) };
+    }
+  };
   const parts = new Map<number, { id?: string; name: string; args: string }>();
   for await (const line of res.lines) {
     if (!line.startsWith('data:')) {
       // A provider answering without streaming (or an error object).
       if (line.startsWith('{')) {
         try {
-          const j = JSON.parse(line) as { error?: { message?: string }; choices?: { message?: { content?: string; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] } }[] };
+          const j = JSON.parse(line) as {
+            error?: { message?: string };
+            choices?: { message?: { content?: string; tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] } }[];
+            usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+          };
           if (j.error) throw httpError(s, 500, JSON.stringify(j));
+          readUsage(j.usage);
           const msg = j.choices?.[0]?.message;
           if (msg?.content) text += msg.content;
           msg?.tool_calls?.forEach((c, i) => parts.set(i, { id: c.id, name: c.function?.name ?? '', args: c.function?.arguments ?? '' }));
@@ -513,6 +561,7 @@ async function stepOpenAi(s: ModelSettings, o: StepOptions, jsonMode = true): Pr
     let j: {
       choices?: { delta?: { content?: string | null; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
       error?: { message?: string };
+      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
     };
     try {
       j = JSON.parse(data);
@@ -520,6 +569,7 @@ async function stepOpenAi(s: ModelSettings, o: StepOptions, jsonMode = true): Pr
       continue;
     }
     if (j.error) throw httpError(s, 500, JSON.stringify({ error: j.error }));
+    readUsage(j.usage);
     const ch = j.choices?.[0];
     if (ch?.delta?.content) {
       text += ch.delta.content;
@@ -541,16 +591,17 @@ async function stepOpenAi(s: ModelSettings, o: StepOptions, jsonMode = true): Pr
       const { args, error } = parseArgs(p.args);
       return { id: p.id || newCallId(), name: p.name, args, ...(error ? { argsError: error } : {}) };
     });
-  return finish(prompted, stripThinking(text), calls, o.tools, truncated);
+  return finish(prompted, stripThinking(text), calls, o.tools, truncated, usage);
 }
 
-function finish(prompted: boolean, text: string, calls: ToolCall[], tools: ToolSpec[], truncated: boolean): StepResult {
+function finish(prompted: boolean, text: string, calls: ToolCall[], tools: ToolSpec[], truncated: boolean, usage?: Usage): StepResult {
   const names = new Set(tools.map((t) => t.name));
-  if (prompted) return { ...parsePromptedReply(text, names), truncated };
-  if (calls.length) return { content: text.trim(), toolCalls: calls, truncated };
+  const extra = { truncated, ...(usage ? { usage } : {}) };
+  if (prompted) return { ...parsePromptedReply(text, names), ...extra };
+  if (calls.length) return { content: text.trim(), toolCalls: calls, ...extra };
   const recovered = textToolCalls(text, names);
-  if (recovered.calls.length) return { content: recovered.rest, toolCalls: recovered.calls, truncated };
-  return { content: text.trim(), toolCalls: [], truncated };
+  if (recovered.calls.length) return { content: recovered.rest, toolCalls: recovered.calls, ...extra };
+  return { content: text.trim(), toolCalls: [], ...extra };
 }
 
 /** One model turn: streamed text and/or tool calls, in NoteTOO's own format. */
@@ -559,15 +610,21 @@ export function chatStep(s: ModelSettings, o: StepOptions): Promise<StepResult> 
   return s.provider === 'ollama' ? stepOllama(s, o) : stepOpenAi(s, o);
 }
 
-/** Reads AI settings as stored by the page (server.json "ai"). */
-export function modelSettings(raw: Record<string, unknown> | null): ModelSettings | null {
-  if (!raw) return null;
+export type ModelChoice = 'main' | 'second';
+
+/** Reads AI settings as stored by the page (server.json "ai"): the main model or the second one. */
+export function modelSettings(raw: Record<string, unknown> | null, which: ModelChoice = 'main'): ModelSettings | null {
+  const src = which === 'second' ? (raw?.second as Record<string, unknown> | null | undefined) : raw;
+  if (!src || typeof src !== 'object') return null;
+  const price = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x > 0 ? x : 0);
   const s: ModelSettings = {
-    provider: raw.provider === 'openai' ? 'openai' : 'ollama',
-    baseUrl: typeof raw.baseUrl === 'string' ? raw.baseUrl.replace(/\/+$/, '') : '',
-    apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : '',
-    textModel: typeof raw.textModel === 'string' ? raw.textModel.trim() : '',
-    contextTokens: typeof raw.contextTokens === 'number' && raw.contextTokens >= 2048 ? raw.contextTokens : 16384,
+    provider: src.provider === 'openai' ? 'openai' : 'ollama',
+    baseUrl: typeof src.baseUrl === 'string' ? src.baseUrl.trim().replace(/\/+$/, '') : '',
+    apiKey: typeof src.apiKey === 'string' ? src.apiKey : '',
+    textModel: typeof src.textModel === 'string' ? src.textModel.trim() : '',
+    contextTokens: typeof src.contextTokens === 'number' && src.contextTokens >= 2048 ? src.contextTokens : 16384,
+    inputPerM: price(src.inputPerM),
+    outputPerM: price(src.outputPerM),
   };
   return s.baseUrl && s.textModel ? s : null;
 }

@@ -108,6 +108,10 @@ interface Mock {
   nativeTools: boolean;
   /** refuse requests carrying `tools` (like a provider without tool support) */
   refuseTools: boolean;
+  /** OpenAI: refuse `stream_options` (like a server that doesn't support usage in streams) */
+  refuseStreamOptions: boolean;
+  /** OpenAI: report the exact cost in the usage chunk (like OpenRouter) */
+  reportCost: number | null;
   close(): Promise<void>;
 }
 
@@ -135,7 +139,7 @@ function conversation(body: Record<string, unknown>, openai: boolean): Conversat
 }
 
 async function mockModel(kind: 'ollama' | 'openai', policy: Policy): Promise<Mock> {
-  const m: Mock = { url: '', requests: [], policy, nativeTools: true, refuseTools: false, close: async () => {} };
+  const m: Mock = { url: '', requests: [], policy, nativeTools: true, refuseTools: false, refuseStreamOptions: false, reportCost: null, close: async () => {} };
   const s = http.createServer(async (req, res) => {
     let raw = '';
     for await (const c of req) raw += c;
@@ -148,10 +152,14 @@ async function mockModel(kind: 'ollama' | 'openai', policy: Policy): Promise<Moc
     if (kind === 'openai' && url === '/v1/models') {
       if (req.headers.authorization !== 'Bearer sk-test') return void res.writeHead(401).end('{"error":{"message":"bad key"}}');
       res.setHeader('content-type', 'application/json');
-      return res.end(JSON.stringify({ data: [{ id: 'cloud/model-x', context_length: 200000, supported_parameters: m.nativeTools ? ['tools', 'tool_choice'] : ['temperature'] }] }));
+      return res.end(JSON.stringify({ data: [{ id: 'cloud/model-x', context_length: 200000, supported_parameters: m.nativeTools ? ['tools', 'tool_choice'] : ['temperature'], pricing: { prompt: '0.0000001', completion: '0.0000005' } }] }));
     }
     if ((kind === 'ollama' && url === '/api/chat') || (kind === 'openai' && url === '/v1/chat/completions')) {
       m.requests.push(body);
+      if (m.refuseStreamOptions && body.stream_options) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ error: { message: 'Unrecognized request argument supplied: stream_options' } }));
+      }
       if (m.refuseTools && body.tools) {
         res.writeHead(400, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ error: { message: 'No endpoints found that support tool use.' } }));
@@ -174,7 +182,7 @@ async function mockModel(kind: 'ollama' | 'openai', policy: Policy): Promise<Moc
         res.writeHead(200, { 'content-type': 'application/x-ndjson' });
         for (const piece of text.match(/[\s\S]{1,25}/g) ?? []) res.write(JSON.stringify({ message: { role: 'assistant', content: piece }, done: false }) + '\n');
         if (calls.length) res.write(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: calls.map((c) => ({ function: { name: c.tool, arguments: c.args } })) }, done: false }) + '\n');
-        return res.end(JSON.stringify({ message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop' }) + '\n');
+        return res.end(JSON.stringify({ message: { role: 'assistant', content: '' }, done: true, done_reason: 'stop', prompt_eval_count: 1000, eval_count: 50 }) + '\n');
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const send = (d: unknown) => res.write(`data: ${JSON.stringify(d)}\n\n`);
@@ -186,6 +194,9 @@ async function mockModel(kind: 'ollama' | 'openai', policy: Policy): Promise<Moc
         for (const piece of args.match(/[\s\S]{1,7}/g) ?? []) send({ choices: [{ delta: { tool_calls: [{ index, function: { arguments: piece } }] } }] });
       });
       send({ choices: [{ delta: {}, finish_reason: calls.length ? 'tool_calls' : 'stop' }] });
+      if ((body.stream_options as { include_usage?: boolean } | undefined)?.include_usage) {
+        send({ choices: [], usage: { prompt_tokens: 2000, completion_tokens: 100, ...(m.reportCost !== null ? { cost: m.reportCost } : {}) } });
+      }
       res.write('data: [DONE]\n\n');
       return res.end();
     }
@@ -224,11 +235,11 @@ interface Ev {
 }
 
 /** Starts a run and follows its events (like the AI panel), answering approvals with `approve`. */
-async function runTask(message: string, o: { approve?: (e: Ev) => boolean; view?: Record<string, string>; history?: unknown[]; onEvent?: (e: Ev, id: string) => void } = {}) {
+async function runTask(message: string, o: { approve?: (e: Ev) => boolean; view?: Record<string, string>; history?: unknown[]; onEvent?: (e: Ev, id: string) => void; model?: 'main' | 'second' } = {}) {
   const start = await req('/api/agent/runs', {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin: base },
-    body: JSON.stringify({ root: rootId, message, history: o.history ?? [], view: o.view ?? {} }),
+    body: JSON.stringify({ root: rootId, message, history: o.history ?? [], view: o.view ?? {}, model: o.model ?? 'main' }),
   });
   const started = (await start.json()) as { id?: string; error?: string };
   if (!start.ok) throw new Error(started.error);
@@ -620,6 +631,71 @@ describe('agent: model compatibility and errors', () => {
     expect(await call('agent:set-settings', { scripts: 'auto' })).toEqual({ scripts: 'ask', python: '', maxSteps: 0 });
     const st = await call('agent:status', rootId);
     expect(st.index.files).toBeGreaterThan(5);
+  });
+});
+
+describe('agent: models and costs', () => {
+  const usage = (r: { events: Ev[] }) => r.events.filter((e) => e.type === 'usage').at(-1) as Ev & { input: number; output: number; costUsd: number | null; exact: boolean; local: boolean };
+  const twoSteps: Policy = (c) => (c.step === 0 ? { tool: 'list_folder', args: { path: '' } } : { text: 'done' });
+
+  it('a local model is free; its tokens are what Ollama reports', async () => {
+    await useModel('ollama', twoSteps);
+    const r = await runTask('list');
+    expect(usage(r)).toMatchObject({ input: 2000, output: 100, costUsd: 0, local: true, exact: false, estimated: false });
+    const logFile = path.join(tmp, 'data', 'agent-log.jsonl');
+    // the audit line is written right after the task's last event
+    for (let i = 0; i < 50 && !existsSync(logFile); i++) await new Promise((r) => setTimeout(r, 20));
+    const log = JSON.parse(readFileSync(logFile, 'utf8').trim().split('\n').at(-1)!);
+    expect(log.usage).toMatchObject({ input: 2000, output: 100 });
+  });
+
+  it('an API model is priced from the provider\'s listed prices, or exactly when it reports the cost', async () => {
+    await useModel('openai', twoSteps);
+    let r = await runTask('list');
+    // 2 turns × (2000 in at $0.10/M + 100 out at $0.50/M)
+    expect(usage(r)).toMatchObject({ input: 4000, output: 200, exact: false, local: true });
+    expect(usage(r).costUsd).toBeCloseTo(0.0005, 8);
+    expect(model.requests[0].stream_options).toEqual({ include_usage: true });
+
+    model.reportCost = 0.0123;
+    r = await runTask('list');
+    expect(usage(r)).toMatchObject({ exact: true });
+    expect(usage(r).costUsd).toBeCloseTo(0.0246, 8);
+  });
+
+  it('prices set in AI settings win over listed ones', async () => {
+    await useModel('openai', twoSteps);
+    store.update((c) => void Object.assign(c.ai!, { inputPerM: 1, outputPerM: 10 }));
+    const r = await runTask('list');
+    expect(usage(r).costUsd).toBeCloseTo((4000 * 1 + 200 * 10) / 1e6, 8);
+  });
+
+  it('a server that refuses stream_options still works (tokens estimated)', async () => {
+    await useModel('openai', twoSteps);
+    model.refuseStreamOptions = true;
+    const r = await runTask('list');
+    expect(r.final!.text).toBe('done');
+    expect(usage(r)).toMatchObject({ estimated: true });
+    expect(usage(r).input).toBeGreaterThan(1000);
+  });
+
+  it('the agent can use the second model set up in AI settings, per request', async () => {
+    await useModel('openai', twoSteps);
+    // main model: an Ollama that isn't running; second model: the API above
+    store.update((c) => {
+      const api = c.ai!;
+      c.ai = { provider: 'ollama', baseUrl: 'http://127.0.0.1:9', apiKey: '', textModel: 'qwen3.5:9b', visionModel: '', contextTokens: 16384, second: api };
+    });
+    const r = await runTask('list', { model: 'second' });
+    expect(r.error).toBeUndefined();
+    expect(r.events.find((e) => e.type === 'start')).toMatchObject({ which: 'second', provider: 'openai', model: 'cloud/model-x' });
+    const main = await runTask('list');
+    expect(main.error!.message).toMatch(/Can't reach Ollama/);
+
+    store.update((c) => void (c.ai!.second = null));
+    const res = await req('/api/agent/runs', { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ root: rootId, message: 'x', model: 'second' }) });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/No second model/);
   });
 });
 

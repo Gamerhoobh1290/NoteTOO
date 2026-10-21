@@ -26,7 +26,8 @@ export interface FileChange {
 export type StepStatus = 'running' | 'done' | 'error' | 'declined';
 
 export type AgentEvent = { seq: number; at: number } & (
-  | { type: 'start'; model: string; provider: string; tools: 'native' | 'prompted'; local: boolean; contextTokens: number; note?: string }
+  | { type: 'start'; model: string; provider: string; tools: 'native' | 'prompted'; local: boolean; contextTokens: number; note?: string; which: ModelChoice }
+  | ({ type: 'usage' } & UsageTotal)
   | { type: 'status'; text: string }
   | { type: 'token'; text: string }
   | { type: 'note'; text: string }
@@ -41,6 +42,19 @@ export type AgentEvent = { seq: number; at: number } & (
   | { type: 'end'; status: 'done' | 'error' | 'stopped'; changes: FileChange[] }
   | { type: 'undo'; undone: number; failed: string[] }
 );
+
+export type ModelChoice = 'main' | 'second';
+
+/** Tokens and price of a task so far (server/agent/runner.mts). */
+export interface UsageTotal {
+  input: number;
+  output: number;
+  /** US dollars; null when the model's price is unknown */
+  costUsd: number | null;
+  exact: boolean;
+  estimated: boolean;
+  local: boolean;
+}
 
 export class AgentRequestError extends Error {
   constructor(
@@ -64,7 +78,13 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
   return j;
 }
 
-export function startRun(o: { root: string; message: string; history: { role: 'user' | 'assistant'; content: string }[]; view: { openPath?: string; subject?: string; selection?: string } }) {
+export function startRun(o: {
+  root: string;
+  message: string;
+  history: { role: 'user' | 'assistant'; content: string }[];
+  view: { openPath?: string; subject?: string; selection?: string };
+  model: ModelChoice;
+}) {
   return post<{ id: string }>('/api/agent/runs', o).then((r) => r.id);
 }
 

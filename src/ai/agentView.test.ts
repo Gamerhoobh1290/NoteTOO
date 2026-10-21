@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from './agentClient';
-import { applyAgentEvent, newAgentView, visibleChanges } from './agentView';
+import { applyAgentEvent, costLine, newAgentView, visibleChanges } from './agentView';
 
 let seq = 0;
 const ev = (e: Record<string, unknown>) => ({ seq: ++seq, at: 0, ...e }) as AgentEvent;
@@ -48,5 +48,14 @@ describe('agent view', () => {
   it('errors are shown, a stop is not an error', () => {
     expect(run({ type: 'error', message: "Can't reach Ollama", kind: 'unreachable' }).error).toBe("Can't reach Ollama");
     expect(run({ type: 'error', message: 'Stopped.', kind: 'stopped' }).error).toBeUndefined();
+  });
+
+  it('formats the cost line', () => {
+    const u = { input: 64_200, output: 3_100, costUsd: 0.0221, exact: false, estimated: false, local: false };
+    expect(costLine(u, 'MAD', 9.5)).toBe('≈ 0.210 MAD · 64.2K tokens in, 3.1K out');
+    expect(costLine({ ...u, exact: true }, 'USD', 1)).toBe('0.022 USD · 64.2K tokens in, 3.1K out');
+    expect(costLine({ ...u, costUsd: 0, local: true }, 'MAD', 9.5)).toBe('Free (runs on your PC) · 64.2K tokens in, 3.1K out');
+    expect(costLine({ ...u, costUsd: null, estimated: true, input: 800 }, 'MAD', 9.5)).toBe('Price unknown (set it in AI settings) · 800 tokens in, 3.1K out (estimated)');
+    expect(run({ type: 'usage', ...u }).usage).toEqual(u);
   });
 });

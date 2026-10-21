@@ -443,6 +443,19 @@ it, or repeats a call). Large API models plan better and finish long multi-file 
 large enough context (16384 tokens or more) for multi-file work. With an API model, the passages the agent reads are
 sent to that provider.
 
+### Two models, and what a task costs
+
+In AI settings you can add a **second model** for the agent, e.g. keep Ollama (`qwen3.5:9b`) as the main model for quick
+and private questions and add OpenRouter with GPT-6 Luna for big multi-file tasks. A switch above the AI panel's message
+box then picks the model for each request ("on your PC" / "online").
+
+Under every agent task, a **cost line** shows the tokens the model read and wrote and their price, e.g.
+`≈ 0.21 MAD · 64K tokens in, 3K out`. The price comes from the provider when it reports it exactly (OpenRouter), else
+from the prices you enter in AI settings (US$ per million input / output tokens), else from the prices the provider
+lists for the model; models on your PC or network show *Free*. Choose the currency and its rate in AI settings
+(*Show costs in*: e.g. `MAD` and about `9.5` dirhams per dollar). It is an estimate: check your provider's dashboard
+for the real bill, and set a credit limit on the API key. Each task's tokens and cost are also in `agent-log.jsonl`.
+
 ### Safety, approvals and undo
 
 - **Inside your shared folders only**, through the same trust boundary as the rest of the server; never `.noteTOO`,

@@ -1,7 +1,7 @@
 // What the AI panel shows of an agent task, built from its events (pure, unit-tested): the plan,
 // each tool step, approvals waiting for the user, the files created or changed, and the answer.
 
-import type { AgentEvent, ApprovalRequest, FileChange, StepStatus } from './agentClient';
+import type { AgentEvent, ApprovalRequest, FileChange, ModelChoice, StepStatus, UsageTotal } from './agentClient';
 
 export type TimelineItem = { kind: 'step'; id: string; tool: string; label: string; status: StepStatus; summary?: string; error?: string } | { kind: 'note'; text: string };
 
@@ -9,7 +9,10 @@ export interface AgentView {
   runId: string;
   status: 'starting' | 'running' | 'waiting' | 'done' | 'error' | 'stopped';
   model?: string;
+  /** the main model set up in NoteTOO, or the second one */
+  which?: ModelChoice;
   local?: boolean;
+  usage?: UsageTotal;
   /** 'prompted': the model has no native tool calling */
   tools?: 'native' | 'prompted';
   note?: string;
@@ -37,7 +40,11 @@ export const newAgentView = (): AgentView => ({ runId: '', status: 'starting', s
 export function applyAgentEvent(v: AgentView, e: AgentEvent): AgentView {
   switch (e.type) {
     case 'start':
-      return { ...v, status: 'running', model: e.model, local: e.local, tools: e.tools, note: e.note };
+      return { ...v, status: 'running', model: e.model, which: e.which, local: e.local, tools: e.tools, note: e.note };
+    case 'usage': {
+      const { seq: _s, at: _a, type: _t, ...usage } = e;
+      return { ...v, usage };
+    }
     case 'status':
       return { ...v, statusText: e.text };
     case 'token':
@@ -82,4 +89,19 @@ export function applyAgentEvent(v: AgentView, e: AgentEvent): AgentView {
 /** Files to show to the user: not the folders the agent made on the way, nor deleted ones twice. */
 export function visibleChanges(v: AgentView): FileChange[] {
   return v.files.filter((f) => f.action !== 'folder');
+}
+
+const compact = (n: number) => (n < 1000 ? String(n) : n < 100_000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K` : `${Math.round(n / 1000)}K`);
+
+/**
+ * The cost line of a task, e.g. "≈ 0.21 MAD · 64K tokens in, 3K out". `perUsd` converts US dollars
+ * to the chosen currency.
+ */
+export function costLine(u: UsageTotal, currency: string, perUsd: number): string {
+  const tokens = `${compact(u.input)} tokens in, ${compact(u.output)} out${u.estimated ? ' (estimated)' : ''}`;
+  if (u.local && (u.costUsd === null || u.costUsd === 0)) return `Free (runs on your PC) · ${tokens}`;
+  if (u.costUsd === null) return `Price unknown (set it in AI settings) · ${tokens}`;
+  const amount = u.costUsd * perUsd;
+  const digits = amount === 0 ? 0 : amount < 0.01 ? 4 : amount < 1 ? 3 : 2;
+  return `${u.exact ? '' : '≈ '}${amount.toFixed(digits)} ${currency} · ${tokens}`;
 }

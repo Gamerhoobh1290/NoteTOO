@@ -51,8 +51,14 @@ export function createAgentService(store: ConfigStore) {
     },
 
     start(req: RunRequest): AgentRun {
-      const model = modelSettings(store.get().ai);
-      if (!model) throw new AgentUnavailable('The AI is not set up yet: choose a model in AI settings.');
+      const model = modelSettings(store.get().ai, req.model);
+      if (!model) {
+        throw new AgentUnavailable(
+          req.model === 'second'
+            ? 'No second model is set up: add one in AI settings (e.g. OpenRouter), or switch back to the main model.'
+            : 'The AI is not set up yet: choose a model in AI settings.',
+        );
+      }
       prune();
       const run = new AgentRun(req);
       runs.set(run.id, run);

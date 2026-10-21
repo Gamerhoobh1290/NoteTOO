@@ -4,9 +4,9 @@ import {
   ShieldQuestion, Sparkles, Square, Trash2, Undo2, Wand2, WifiOff, X,
 } from 'lucide-react';
 import { agentAvailable } from '../../ai/agentClient';
-import { visibleChanges, type AgentView, type TimelineItem } from '../../ai/agentView';
+import { costLine, visibleChanges, type AgentView, type TimelineItem } from '../../ai/agentView';
 import { SHOW_TARGETS, parseShowLinks } from '../../ai/guide';
-import { PRESETS, isConfigured, presetOf, useAiSettings } from '../../ai/settings';
+import { PRESETS, isConfigured, isLocalNetwork, isProfileReady, presetOf, useAiSettings } from '../../ai/settings';
 import { SCRATCHPAD } from '../../fs/paths';
 import { fileKind } from '../../lib/fileKinds';
 import { revealText, spotlight } from '../../lib/reveal';
@@ -205,6 +205,28 @@ export function AiPanel() {
         </div>
       )}
 
+      {ai.agentMode && agentAvailable && isConfigured(settings) && isProfileReady(settings.second) && (
+        <div className="seg agent-model" role="radiogroup" aria-label="Model for the agent">
+          {(['main', 'second'] as const).map((which) => {
+            const m = which === 'main' ? settings : settings.second!;
+            const where = isLocalNetwork(m.baseUrl) ? 'on your PC' : 'online';
+            return (
+              <button
+                key={which}
+                type="button"
+                role="radio"
+                aria-checked={ai.agentModel === which}
+                className={cls(ai.agentModel === which && 'on')}
+                title={`${m.textModel} (${where})${where === 'online' ? ': the passages it reads are sent to this provider' : ': nothing leaves your PC'}`}
+                onClick={() => ai.setAgentModel(which)}
+              >
+                {m.textModel.split('/').pop()} <span className="muted">· {where}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <form
         className="ai-input"
         onSubmit={(e) => {
@@ -347,6 +369,7 @@ function StepIcon({ status }: { status: string }) {
 function AgentMessage({ m }: { m: AiMessage }) {
   const app = useApp();
   const ai = useAi();
+  const settings = useAiSettings();
   const v = m.agent as AgentView;
   const running = v.status === 'starting' || v.status === 'running' || v.status === 'waiting';
   const steps = v.timeline.filter((t): t is Extract<TimelineItem, { kind: 'step' }> => t.kind === 'step');
@@ -514,6 +537,11 @@ function AgentMessage({ m }: { m: AiMessage }) {
             </span>
           )}
         </div>
+      )}
+      {v.usage && (
+        <p className="agent-cost" title="Tokens the model read and wrote for this task, and their price (as the provider reports it, or from the prices in AI settings)">
+          {costLine(v.usage, settings?.currency ?? 'USD', settings?.perUsd ?? 1)}
+        </p>
       )}
       {m.status === 'done' && v.final && <MessageActions m={{ ...m, text: v.final }} />}
     </div>

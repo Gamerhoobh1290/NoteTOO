@@ -4,7 +4,7 @@
 // here touches disk except "Save to notes" and applying an organize plan, both on explicit action.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { AgentRequestError, agentAvailable, approve as approveStep, followRun, startRun, stopRun, undoRun } from '../ai/agentClient';
+import { AgentRequestError, agentAvailable, type ModelChoice, approve as approveStep, followRun, startRun, stopRun, undoRun } from '../ai/agentClient';
 import { applyAgentEvent, newAgentView, type AgentView } from '../ai/agentView';
 import { AiError, type ChatMessage } from '../ai/client';
 import { detectIntent, highlightFocus, resolveDocs } from '../ai/context';
@@ -127,6 +127,10 @@ function useAiState() {
   const [organize, setOrganize] = useState<OrganizeState | null>(null);
   /** Chat requests go to the agent on the PC (NoteTOO server only); off = the classic assistant. */
   const [agentMode, setAgentMode] = useState(agentAvailable);
+  /** The agent's model for the next requests: the main one, or the second one set up in AI settings. */
+  const [agentModel, setAgentModel] = useState<ModelChoice>('main');
+  const agentModelRef = useRef(agentModel);
+  agentModelRef.current = agentModel;
   const busyRef = useRef<Busy | null>(null);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -377,7 +381,9 @@ function useAiState() {
         // The agent reads files on disk: pending note edits are saved first.
         await flushAllDocs();
         const sel = selection.current?.path === place.path ? selection.current?.text : undefined;
-        runId = await startRun({ root, message: question, history, view: { openPath: place.kind === 'file' ? place.path : undefined, subject: place.subject, selection: sel } });
+        const second = getAiSettings()?.second;
+        const model: ModelChoice = agentModelRef.current === 'second' && second?.baseUrl.trim() && second.textModel.trim() ? 'second' : 'main';
+        runId = await startRun({ root, message: question, history, view: { openPath: place.kind === 'file' ? place.path : undefined, subject: place.subject, selection: sel }, model });
         patchAgent(id, (v) => ({ ...v, runId, status: 'running' }));
         ac.signal.addEventListener('abort', () => void stopRun(runId), { once: true });
         let ended = 'running' as AgentView['status'];
@@ -695,7 +701,7 @@ function useAiState() {
   return {
     messages, busy, settingsOpen, setSettingsOpen,
     summarize, explain, highlight, ask, stop, clear, saveToNotes,
-    agentMode, setAgentMode, answerApproval, undoAgent,
+    agentMode, setAgentMode, agentModel, setAgentModel, answerApproval, undoAgent,
     suggestions, resolveSuggestion, clearSuggestions, focusSuggestion, showSuggestion,
     organize, setOrganize, startOrganize, applyOrganize, closeOrganize,
   };

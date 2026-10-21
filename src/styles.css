@@ -2810,6 +2810,28 @@ textarea:focus {
   gap: 5px;
   font-size: 13px;
 }
+.agent-model {
+  display: flex;
+  margin: 8px 12px 0;
+}
+.agent-model button {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.agent-prices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.agent-cost {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
 .agent-settings {
   display: grid;
   gap: 12px;
