@@ -2,7 +2,7 @@
 // count as context), explicit "page 3" / "exercice 2" references, and neighbouring blocks for
 // context, within a character budget. No AI call (unit-tested).
 
-import { blockLabel, fold, type DocModel } from './structure';
+import { blockLabel, fold, type DocModel } from './structure.js';
 
 const STOP = new Set(
   (

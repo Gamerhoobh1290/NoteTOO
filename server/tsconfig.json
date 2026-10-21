@@ -12,6 +12,6 @@
     "rootDir": "..",
     "outDir": "../out"
   },
-  "include": ["*.mts", "../electron/disk.mts", "../electron/receive.mts", "../src/desktop/bridge.ts", "../src/fs/paths.ts"],
+  "include": ["*.mts", "agent/*.mts", "../src/ai/structure.ts", "../src/ai/retrieve.ts", "../src/ai/text.ts", "../src/fs/geometry.ts", "../electron/disk.mts", "../electron/receive.mts", "../src/desktop/bridge.ts", "../src/fs/paths.ts"],
   "exclude": ["*.test.ts"]
 }

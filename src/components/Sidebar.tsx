@@ -1,10 +1,12 @@
 import { useEffect, useMemo, type ComponentType } from 'react';
 import {
+  Download,
   BookOpen, ChevronDown, ChevronRight, Ellipsis, ExternalLink, Folder, FolderInput, FolderOpen, FolderPlus, FolderSearch,
   NotebookPen, Pencil, Plus, Trash2, Upload,
 } from 'lucide-react';
 import type { Entry } from '../fs/fsService';
 import { SECTIONS, type Section, classify, parentPath, searchKey, splitPath } from '../fs/paths';
+import { canDownload, downloadFile, downloadZip } from '../lib/download';
 import { openMenu, pickFiles, type MenuItem } from '../lib/ui';
 import { sectionKey, sortEntries, useApp, type SortKey } from '../state/AppContext';
 import { sectionsOf, type SectionInfo } from '../state/sections';
@@ -203,6 +205,7 @@ function SubjectNode({ entry }: { entry: Entry }) {
           { label: 'Overview', icon: BookOpen, onSelect: () => app.setView({ kind: 'subject', subject: entry.path }) },
           { label: 'Subject notes', icon: NotebookPen, onSelect: () => app.setView({ kind: 'notes', subject: entry.path }) },
           { label: 'New folder…', icon: FolderPlus, onSelect: () => app.createFolder(entry.path) },
+          ...downloadItems(app, [entry.path], 'dir'),
           ...windowsItems(app, entry),
           { label: 'Rename…', icon: Pencil, onSelect: () => app.renameEntry(entry) },
           { label: 'Delete…', icon: Trash2, danger: true, onSelect: () => app.deleteEntry(entry) },
@@ -270,16 +273,26 @@ function windowsItems(app: ReturnType<typeof useApp>, entry: Pick<Entry, 'path' 
     : [{ label: 'Open in File Explorer', icon: FolderSearch, onSelect: () => app.openInWindows(entry.path) }];
 }
 
+/** Browser connected to the NoteTOO server: save a copy on this computer (the original stays on the PC). */
+export function downloadItems(app: ReturnType<typeof useApp>, paths: string[], kind: 'file' | 'dir'): MenuItem[] {
+  const root = app.fs?.desktop?.rootId;
+  if (!canDownload || !root || !paths.length) return [];
+  if (paths.length === 1 && kind === 'file') return [{ label: 'Download a copy', icon: Download, onSelect: () => downloadFile(root, paths[0]) }];
+  return [{ label: paths.length > 1 ? `Download ${paths.length} files (.zip)` : 'Download as .zip', icon: Download, onSelect: () => void downloadZip(root, paths) }];
+}
+
 export function entryMenu(app: ReturnType<typeof useApp>, entry: Entry): MenuItem[] {
   const many = entry.kind === 'file' && app.selection.length > 1 && app.selection.includes(entry.path);
   if (many) {
     return [
+      ...downloadItems(app, app.selection, 'file'),
       { label: `Move ${app.selection.length} files to…`, icon: FolderInput, onSelect: () => app.moveEntryPrompt(app.selection) },
       { label: `Delete ${app.selection.length} files…`, icon: Trash2, danger: true, onSelect: () => app.deleteFiles(app.selection) },
     ];
   }
   const common: MenuItem[] = [
     ...windowsItems(app, entry),
+    ...downloadItems(app, [entry.path], entry.kind),
     { label: 'Rename…', icon: Pencil, onSelect: () => app.renameEntry(entry) },
     { label: 'Move to…', icon: FolderInput, onSelect: () => app.moveEntryPrompt([entry.path]) },
     { label: 'Delete…', icon: Trash2, danger: true, onSelect: () => app.deleteEntry(entry) },

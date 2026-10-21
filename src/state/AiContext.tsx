@@ -4,6 +4,8 @@
 // here touches disk except "Save to notes" and applying an organize plan, both on explicit action.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { AgentRequestError, agentAvailable, type ApprovalMode, type ModelChoice, approve as approveStep, followRun, startRun, stopRun, undoRun } from '../ai/agentClient';
+import { applyAgentEvent, newAgentView, type AgentView } from '../ai/agentView';
 import { AiError, type ChatMessage } from '../ai/client';
 import { detectIntent, highlightFocus, resolveDocs } from '../ai/context';
 import type { ReadOptions } from '../ai/extract';
@@ -46,6 +48,8 @@ export interface AiMessage {
   sources?: string[];
   /** open AI settings from an error */
   settingsHint?: boolean;
+  /** an agent task run on the PC: its steps, approvals, files and answer */
+  agent?: AgentView;
 }
 
 export interface Suggestion {
@@ -113,6 +117,8 @@ interface Cached {
   profile?: Promise<Profile | null>;
 }
 
+const APPROVALS_KEY = 'notetoo.agentApprovals';
+
 function useAiState() {
   const app = useApp();
   const [messages, setMessages] = useState<AiMessage[]>([]);
@@ -121,7 +127,33 @@ function useAiState() {
   const [suggestions, setSuggestions] = useState<Record<string, Suggestion[]>>({});
   const [focusSuggestion, setFocusSuggestion] = useState<{ path: string; id: string; n: number } | null>(null);
   const [organize, setOrganize] = useState<OrganizeState | null>(null);
+  /** Chat requests go to the agent on the PC (NoteTOO server only); off = the classic assistant. */
+  const [agentMode, setAgentMode] = useState(agentAvailable);
+  /** The agent's model for the next requests: the main one, or the second one set up in AI settings. */
+  const [agentModel, setAgentModel] = useState<ModelChoice>('main');
+  const agentModelRef = useRef(agentModel);
+  agentModelRef.current = agentModel;
+  /** Who answers the agent's permission requests: you, or auto mode's reviewer (remembered in this browser). */
+  const [agentApprovals, setAgentApprovalsState] = useState<ApprovalMode>(() => {
+    try {
+      return localStorage.getItem(APPROVALS_KEY) === 'auto' ? 'auto' : 'ask';
+    } catch {
+      return 'ask';
+    }
+  });
+  const agentApprovalsRef = useRef(agentApprovals);
+  agentApprovalsRef.current = agentApprovals;
+  const setAgentApprovals = useCallback((m: ApprovalMode) => {
+    setAgentApprovalsState(m);
+    try {
+      localStorage.setItem(APPROVALS_KEY, m);
+    } catch {
+      /* not remembered */
+    }
+  }, []);
   const busyRef = useRef<Busy | null>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const cache = useRef(new Map<string, Cached>());
   /** files viewed this session, most recent first */
   const recent = useRef<string[]>([]);
@@ -329,6 +361,126 @@ function useAiState() {
     [runAnswer, docFor, withProfile],
   );
 
+  /** Re-reads the folder (debounced) after the agent changed files, so they show up at once. */
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshSoon = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      void appRef.current.refresh();
+      // Open note editors reload what changed on disk when the window regains focus.
+      window.dispatchEvent(new Event('focus'));
+    }, 300);
+  }, []);
+
+  const patchAgent = (id: string, f: (v: AgentView) => AgentView) =>
+    setMessages((ms) => ms.map((m) => (m.id === id && m.agent ? { ...m, agent: f(m.agent) } : m)));
+
+  /**
+   * A request done by the agent on the PC: it finds and reads the files, uses the tools and
+   * answers; this page shows the progress and asks the user when something needs approval.
+   */
+  const askAgent = useCallback(
+    async (question: string) => {
+      const started = await begin('Agent task');
+      if (!started) return;
+      const { ac } = started;
+      const a = appRef.current;
+      const root = a.fs?.desktop?.rootId;
+      if (!root) return end(ac);
+      const place = placeOf(a.view);
+      a.setPanels({ ai: true, scratchpad: false });
+      const id = newId();
+      const history = messagesRef.current
+        .filter((m) => m.text && (m.role === 'user' || m.status === 'done'))
+        .slice(-10)
+        .map((m) => ({ role: m.role, content: m.agent?.final ?? m.text }));
+      setMessages((ms) => [...ms, { id: newId(), role: 'user', text: question }, { id, role: 'assistant', text: '', status: 'streaming', notesPath: notesFor(place.subject), agent: newAgentView() }]);
+      let runId = '';
+      let toOpen: string | undefined;
+      try {
+        // The agent reads files on disk: pending note edits are saved first.
+        await flushAllDocs();
+        const sel = selection.current?.path === place.path ? selection.current?.text : undefined;
+        const second = getAiSettings()?.second;
+        const model: ModelChoice = agentModelRef.current === 'second' && second?.baseUrl.trim() && second.textModel.trim() ? 'second' : 'main';
+        runId = await startRun({ root, message: question, history, view: { openPath: place.kind === 'file' ? place.path : undefined, subject: place.subject, selection: sel }, model, approvals: agentApprovalsRef.current });
+        patchAgent(id, (v) => ({ ...v, runId, status: 'running' }));
+        ac.signal.addEventListener('abort', () => void stopRun(runId), { once: true });
+        let ended = 'running' as AgentView['status'];
+        await followRun(
+          runId,
+          (e) => {
+            setMessages((ms) =>
+              ms.map((m) => {
+                if (m.id !== id || !m.agent) return m;
+                const agent = applyAgentEvent(m.agent, e);
+                const text = agent.final ?? agent.draft;
+                return { ...m, agent, text, sources: agent.sources.length ? agent.sources : m.sources };
+              }),
+            );
+            if (e.type === 'status' || (e.type === 'step' && e.status === 'running')) {
+              const progress = e.type === 'status' ? e.text : `${e.label}…`;
+              if (busyRef.current?.ac === ac) setBusy({ ...busyRef.current, progress });
+            }
+            if (e.type === 'approval' && busyRef.current?.ac === ac) setBusy({ ...busyRef.current, progress: 'Waiting for your approval…' });
+            if (e.type === 'file') refreshSoon();
+            if (e.type === 'open') toOpen = e.path;
+            if (e.type === 'end') ended = e.status;
+          },
+          { onConnection: (online) => patchAgent(id, (v) => ({ ...v, offline: !online })) },
+        );
+        patchMessage(id, { status: ended === 'done' ? 'done' : ended === 'stopped' ? 'stopped' : 'error' });
+        if (ended === 'done' && toOpen) appRef.current.setView({ kind: 'file', path: toOpen });
+      } catch (e) {
+        const msg = e instanceof AgentRequestError || e instanceof AiError ? e.message : `Something went wrong: ${errorMessage(e)}`;
+        if (e instanceof AgentRequestError && e.status === 409) setSettingsOpen(true);
+        patchMessage(id, { status: 'error', text: msg, settingsHint: e instanceof AgentRequestError && e.status === 409 });
+        patchAgent(id, (v) => ({ ...v, status: 'error', error: msg }));
+      } finally {
+        end(ac);
+      }
+    },
+    [begin, refreshSoon],
+  );
+
+  const answerApproval = useCallback(async (messageId: string, approvalId: string, approved: boolean) => {
+    const m = messagesRef.current.find((x) => x.id === messageId);
+    if (!m?.agent?.runId) return;
+    patchAgent(messageId, (v) => ({ ...v, approvals: v.approvals.map((x) => (x.id === approvalId ? { ...x, state: 'sending' } : x)) }));
+    try {
+      await approveStep(m.agent.runId, approvalId, approved);
+    } catch (e) {
+      toast(errorMessage(e), 'error');
+      patchAgent(messageId, (v) => ({ ...v, approvals: v.approvals.map((x) => (x.id === approvalId ? { ...x, state: 'pending' } : x)) }));
+    }
+  }, []);
+
+  const undoAgent = useCallback(
+    async (messageId: string) => {
+      const m = messagesRef.current.find((x) => x.id === messageId);
+      if (!m?.agent?.runId) return;
+      const n = m.agent.files.filter((f) => f.action !== 'deleted').length;
+      const ok = await confirmDialog({
+        title: 'Undo what the agent did?',
+        message: `${n} change${n > 1 ? 's' : ''} will be reverted: files it created go to the Recycle Bin, files it changed get their previous version back, moved files go back. Deleted files stay in the Recycle Bin.`,
+        confirmLabel: 'Undo changes',
+      });
+      if (!ok) return;
+      await flushAllDocs();
+      patchAgent(messageId, (v) => ({ ...v, undo: 'running' }));
+      try {
+        const r = await undoRun(m.agent.runId);
+        patchAgent(messageId, (v) => ({ ...v, undo: r }));
+        toast(r.failed.length ? `Undone ${r.undone} change(s); ${r.failed.length} could not be undone.` : `Undone ${r.undone} change(s).`, r.failed.length ? 'error' : 'info');
+      } catch (e) {
+        patchAgent(messageId, (v) => ({ ...v, undo: undefined }));
+        toast(`Could not undo: ${errorMessage(e)}`, 'error');
+      }
+      refreshSoon();
+    },
+    [refreshSoon],
+  );
+
   const ask = useCallback(
     async (question: string) => {
       const a = appRef.current;
@@ -340,6 +492,8 @@ function useAiState() {
       if (intent === 'highlight' && current && !['video', 'audio', 'image', 'other'].includes(fileKind(place.label))) {
         return highlight(current, highlightFocus(question), question);
       }
+      // Everything else but "how do I…" questions about the app goes to the agent on the PC.
+      if (agentMode && agentAvailable && intent !== 'app' && a.fs?.desktop) return askAgent(question);
 
       const index = (await a.ensureIndex().catch(() => [])).filter((e) => e.kind === 'file').map((e) => e.path);
       // "How do I…" questions about the app are answered from the guide, not from the open file.
@@ -400,7 +554,7 @@ function useAiState() {
         question,
       );
     },
-    [messages, runAnswer, docFor, withProfile, highlight],
+    [messages, runAnswer, docFor, withProfile, highlight, agentMode, askAgent],
   );
 
   const stop = useCallback(() => busyRef.current?.ac.abort(), []);
@@ -567,6 +721,7 @@ function useAiState() {
   return {
     messages, busy, settingsOpen, setSettingsOpen,
     summarize, explain, highlight, ask, stop, clear, saveToNotes,
+    agentMode, setAgentMode, agentModel, setAgentModel, agentApprovals, setAgentApprovals, answerApproval, undoAgent,
     suggestions, resolveSuggestion, clearSuggestions, focusSuggestion, showSuggestion,
     organize, setOrganize, startOrganize, applyOrganize, closeOrganize,
   };

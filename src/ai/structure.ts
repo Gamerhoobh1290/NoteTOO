@@ -2,8 +2,7 @@
 // list items, tables, captions…) with exact positions in the page text, tagged when they are a
 // definition, theorem, example… Built once per file version, without any AI call (unit-tested).
 
-import type { TextDoc } from './extract';
-import type { Chunk, PageText } from './text';
+import type { Chunk, PageText, TextDoc } from './text.js';
 
 export type BlockKind = 'paragraph' | 'list' | 'table' | 'caption' | 'code';
 export type BlockTag = 'definition' | 'theorem' | 'property' | 'formula' | 'method' | 'example' | 'exercise' | 'remark' | 'warning' | 'summary' | 'question';
@@ -253,7 +252,7 @@ export function buildModel(name: string, doc: TextDoc): DocModel {
       if (format === 'pdf' && isBoilerplate(l, bp)) continue;
 
       // Headings
-      const md = format === 'markdown' || format === 'docx' || format === 'sheet' ? MD_HEADING.exec(t) : null;
+      const md = format === 'markdown' || format === 'docx' || format === 'sheet' || format === 'slides' ? MD_HEADING.exec(t) : null;
       if (md) {
         flush();
         addSection(md[2].replace(/^Sheet "(.*)"$/, 'Sheet: $1'), md[1].length, l.page);
@@ -311,6 +310,7 @@ export function buildModel(name: string, doc: TextDoc): DocModel {
 function guessType(name: string, doc: TextDoc, sections: DocSection[], blocks: DocBlock[]): DocType {
   if (doc.format === 'code') return 'code';
   if (doc.format === 'sheet') return 'spreadsheet';
+  if (doc.format === 'slides') return 'slides';
   const n = fold(name);
   const head = fold(doc.pages.slice(0, 2).join(' ').slice(0, 3000));
   const exercises = blocks.filter((b) => b.tag === 'exercise').length + sections.filter((s) => /^(exercice|exercise|probleme|problem)\b/.test(fold(s.title))).length;

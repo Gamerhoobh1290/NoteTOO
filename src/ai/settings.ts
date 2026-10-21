@@ -20,7 +20,19 @@ export interface AiSettings {
   visionModel: string;
   /** context window in tokens; bounds how much of a file is sent at once */
   contextTokens: number;
+  /** price in US dollars per million input / output tokens, for the agent's cost line (0 = unknown;
+   *  OpenRouter reports exact costs itself) */
+  inputPerM: number;
+  outputPerM: number;
+  /** a second model the agent can switch to per request (e.g. a cloud model for big tasks) */
+  second: ModelProfile | null;
+  /** currency of the cost line, and how many of it make one US dollar */
+  currency: string;
+  perUsd: number;
 }
+
+/** One model and its server, for the agent's second model. */
+export type ModelProfile = Pick<AiSettings, 'provider' | 'baseUrl' | 'apiKey' | 'textModel' | 'contextTokens' | 'inputPerM' | 'outputPerM'>;
 
 export const PRESETS = {
   ollama: { label: 'Ollama (this PC)', provider: 'ollama', baseUrl: 'http://localhost:11434', contextTokens: 16384 },
@@ -36,8 +48,27 @@ export function presetOf(s: Pick<AiSettings, 'provider' | 'baseUrl'>): PresetId 
 
 export function defaultSettings(preset: PresetId = 'ollama'): AiSettings {
   const p = PRESETS[preset];
-  return { provider: p.provider, baseUrl: p.baseUrl, apiKey: '', textModel: '', visionModel: '', contextTokens: p.contextTokens };
+  return {
+    provider: p.provider,
+    baseUrl: p.baseUrl,
+    apiKey: '',
+    textModel: '',
+    visionModel: '',
+    contextTokens: p.contextTokens,
+    inputPerM: 0,
+    outputPerM: 0,
+    second: null,
+    currency: 'USD',
+    perUsd: 1,
+  };
 }
+
+export function defaultProfile(preset: PresetId = 'openrouter'): ModelProfile {
+  const { provider, baseUrl, apiKey, textModel, contextTokens, inputPerM, outputPerM } = defaultSettings(preset);
+  return { provider, baseUrl, apiKey, textModel, contextTokens, inputPerM, outputPerM };
+}
+
+export const isProfileReady = (p: ModelProfile | null): p is ModelProfile => !!p && !!p.baseUrl.trim() && !!p.textModel.trim();
 
 export function isConfigured(s: AiSettings | null): s is AiSettings {
   return !!s && !!s.baseUrl.trim() && !!s.textModel.trim();
@@ -53,21 +84,47 @@ export function isRemote(baseUrl: string): boolean {
   }
 }
 
+/** On this PC or your own network (home network, Tailscale): the same rule as the server's agent. */
+export function isLocalNetwork(baseUrl: string): boolean {
+  try {
+    const h = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '');
+    return /^(localhost|127\.|::1$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(h) || h.endsWith('.local') || h.endsWith('.ts.net');
+  } catch {
+    return false;
+  }
+}
+
 const KEY = 'notetoo.ai.v1';
 const onServer = desktop?.mode === 'server';
 
-function parse(v: Partial<AiSettings> | null): AiSettings | null {
-  if (!v || typeof v !== 'object') return null;
+const price = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x >= 0 && x < 10_000 ? x : 0);
+
+function parseProfile(v: Partial<ModelProfile>): ModelProfile {
   const base = defaultSettings(v.provider === 'openai' ? 'custom' : 'ollama');
   return {
     provider: v.provider === 'openai' ? 'openai' : 'ollama',
     baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : base.baseUrl,
     apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
     textModel: typeof v.textModel === 'string' ? v.textModel : '',
-    visionModel: typeof v.visionModel === 'string' ? v.visionModel : '',
     contextTokens: typeof v.contextTokens === 'number' && v.contextTokens >= 2048 ? v.contextTokens : base.contextTokens,
+    inputPerM: price(v.inputPerM),
+    outputPerM: price(v.outputPerM),
   };
 }
+
+/** Settings as stored (older versions lack the newer fields). */
+export function parseAiSettings(v: Partial<AiSettings> | null): AiSettings | null {
+  if (!v || typeof v !== 'object') return null;
+  const second = v.second && typeof v.second === 'object' ? parseProfile(v.second) : null;
+  return {
+    ...parseProfile(v),
+    visionModel: typeof v.visionModel === 'string' ? v.visionModel : '',
+    second: second && (second.baseUrl.trim() || second.textModel.trim()) ? second : null,
+    currency: typeof v.currency === 'string' && /^[A-Za-z]{3}$/.test(v.currency.trim()) ? v.currency.trim().toUpperCase() : 'USD',
+    perUsd: typeof v.perUsd === 'number' && v.perUsd > 0 && v.perUsd < 1_000_000 ? v.perUsd : 1,
+  };
+}
+const parse = parseAiSettings;
 
 function read(): AiSettings | null {
   try {
@@ -99,7 +156,8 @@ export function getAiSettings(): AiSettings | null {
  * they could not be stored; they are still used until NoteTOO is closed.
  */
 export async function saveAiSettings(s: AiSettings): Promise<boolean> {
-  current = { ...s, baseUrl: s.baseUrl.trim().replace(/\/+$/, ''), textModel: s.textModel.trim(), visionModel: s.visionModel.trim() };
+  const second = s.second ? { ...s.second, baseUrl: s.second.baseUrl.trim().replace(/\/+$/, ''), textModel: s.second.textModel.trim() } : null;
+  current = parseAiSettings({ ...s, baseUrl: s.baseUrl.trim().replace(/\/+$/, ''), textModel: s.textModel.trim(), visionModel: s.visionModel.trim(), second })!;
   listeners.forEach((l) => l());
   if (onServer) return serverCall('ai:set-settings', current).then(() => true, () => false);
   try {
